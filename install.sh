@@ -131,6 +131,40 @@ install_agy() {
     }
 }
 
+print_path_instruction() {
+    local shell_name config command_path
+    shell_name=${SHELL:-}
+    shell_name=${shell_name##*/}
+    case "$shell_name" in
+        bash) config=$HOME/.bashrc ;;
+        zsh) config=$HOME/.zshrc ;;
+        fish) config=$HOME/.config/fish/config.fish ;;
+        ksh) config=$HOME/.kshrc ;;
+        *)
+            if [ -e "$HOME/.bashrc" ]; then
+                config=$HOME/.bashrc
+            elif [ -e "$HOME/.zshrc" ]; then
+                config=$HOME/.zshrc
+            else
+                config=$HOME/.profile
+            fi
+            ;;
+    esac
+
+    command_path=${prefix%/}/bin
+    config=${config/#$HOME/\$HOME}
+    command_path=${command_path/#$HOME/\$HOME}
+    if [ "$shell_name" = fish ]; then
+        printf 'echo '\''fish_add_path "%s"'\'' >> "%s" && source "%s"\n' \
+            "$command_path" "$config" "$config"
+    else
+        # $PATH must remain literal in the command copied into the shell file.
+        # shellcheck disable=SC2016
+        printf 'echo '\''export PATH="%s:$PATH"'\'' >> "%s" && source "%s"\n' \
+            "$command_path" "$config" "$config"
+    fi
+}
+
 download_file "$url" "$download"
 
 if [ ! -s "$download" ] || ! head -n 1 "$download" | grep -q '^#!/usr/bin/env bash$'; then
@@ -149,7 +183,12 @@ install -d "$bindir"
 install -m 0755 "$download" "$bindir/h-agent"
 
 echo "installed h-agent to $bindir/h-agent"
-case ":${PATH:-}:" in
-    *":${prefix%/}/bin:"*) ;;
-    *) echo "add ${prefix%/}/bin to PATH to run h-agent" ;;
-esac
+if [ -z "$destdir" ]; then
+    case ":${PATH:-}:" in
+        *":${prefix%/}/bin:"*) ;;
+        *)
+            echo 'Run this command to add h-agent to PATH:'
+            print_path_instruction
+            ;;
+    esac
+fi
