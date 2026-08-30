@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+make_cli() {
+    local name=$1
+    cat >"$tmp/$name" <<'EOF'
+#!/usr/bin/env bash
+printf 'HOME=%s\n' "$HOME"
+printf 'BASE=%s\n' "${ANTHROPIC_BASE_URL-}"
+printf 'OPUS=%s\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL-}"
+printf 'HAIKU=%s\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL-}"
+printf 'ARG=%s\n' "$@"
+EOF
+    chmod +x "$tmp/$name"
+}
+
+for cli in claude agy codex; do make_cli "$cli"; done
+export PATH="$tmp:$PATH"
+
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+assert_has() { grep -Fqx -- "$2" <<<"$1" || fail "missing: $2"; }
+
+output=$(HOME=/chosen/home "$root/h-agent" codex run)
+assert_has "$output" 'HOME=/chosen/home'
+assert_has "$output" 'ARG=--dangerously-bypass-approvals-and-sandbox'
+assert_has "$output" 'ARG=run'
+
+output=$(AGENT_SKIP_PERMISSIONS=0 "$root/h-agent" agy prompt)
+assert_has "$output" 'ARG=prompt'
+if grep -Fq -- '--dangerously-skip-permissions' <<<"$output"; then
+    fail 'skip flag present when disabled'
+fi
+
+output=$(AGENT_PROVIDER_URL=http://localhost:8000/v1/ \
+    AGENT_PROVIDER_MODEL=large AGENT_PROVIDER_SMALL_MODEL=small \
+    "$root/h-agent" claude 2>/dev/null)
+assert_has "$output" 'BASE=http://localhost:8000'
+assert_has "$output" 'OPUS=large'
+assert_has "$output" 'HAIKU=small'
+
+if AGENT_PROVIDER_URL=http://localhost AGENT_PROVIDER_MODEL=x \
+    "$root/h-agent" codex >/dev/null 2>&1; then
+    fail 'codex accepted a local provider'
+fi
+
+if "$root/h-agent" unknown >/dev/null 2>&1; then
+    fail 'unknown CLI was accepted'
+fi
+
+printf 'ok - h-agent behavior\n'

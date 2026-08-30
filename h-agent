@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 h-network
+#
+# h-agent — launch an agent CLI with safe, configurable defaults.
+set -uo pipefail
+
+usage() {
+    cat <<'EOF'
+usage: h-agent [claude|agy|codex] [args...]
+
+  claude   --dangerously-skip-permissions, tools limited to
+           Bash/Read/Write/Edit/Glob/Grep
+  agy      --dangerously-skip-permissions
+  codex    --dangerously-bypass-approvals-and-sandbox
+
+With no CLI named, starts $AGENT_CLI (default: claude).
+Any further arguments are passed straight to the chosen CLI.
+
+Environment:
+  AGENT_CLI               default CLI when none is named (default: claude)
+  AGENT_SKIP_PERMISSIONS  1 (default) skips approval prompts; 0 keeps them
+  AGENT_CLAUDE_TOOLS      claude's tool list (default:
+                          "Bash Read Write Edit Glob Grep"; empty = unrestricted)
+
+Local inference endpoint (claude only — codex and agy refuse):
+  AGENT_PROVIDER_URL          endpoint base, e.g. http://10.0.0.5:8000
+                              a trailing /v1 is stripped here
+  AGENT_PROVIDER_MODEL        model id, exactly as the endpoint serves it
+  AGENT_PROVIDER_SMALL_MODEL  optional, defaults to AGENT_PROVIDER_MODEL
+  AGENT_PROVIDER_TOKEN        optional, a placeholder is sent if unset
+
+h-agent inherits the invoking user's environment, including HOME. Install it
+under any account; no runtime username or home directory is built in.
+EOF
+}
+
+cli="${AGENT_CLI:-claude}"
+case "${1:-}" in
+    claude|agy|codex) cli="$1"; shift ;;
+    -h|--help|help) usage; exit 0 ;;
+    "") ;;
+    -*) ;;
+    *)
+        echo "error: unknown agent CLI '$1' (expected claude, agy or codex)" >&2
+        echo "       run 'h-agent --help' for usage" >&2
+        exit 2
+        ;;
+esac
+
+if ! command -v "$cli" >/dev/null 2>&1; then
+    echo "error: '$cli' is not installed or is not on PATH" >&2
+    exit 127
+fi
+
+if [ -n "${AGENT_PROVIDER_URL:-}" ]; then
+    case "$cli" in
+        codex|agy)
+            echo "error: $cli cannot use a local inference endpoint" >&2
+            echo "       AGENT_PROVIDER_URL is set to '$AGENT_PROVIDER_URL', but only claude" >&2
+            echo "       supports one. Refusing rather than starting against the vendor." >&2
+            echo "       Use 'h-agent claude', or unset AGENT_PROVIDER_URL to run $cli normally." >&2
+            exit 3
+            ;;
+        claude)
+            if [ -z "${AGENT_PROVIDER_MODEL:-}" ]; then
+                echo "error: AGENT_PROVIDER_URL is set but AGENT_PROVIDER_MODEL is not" >&2
+                echo "       Set the model id that the endpoint actually serves." >&2
+                exit 3
+            fi
+
+            unset ANTHROPIC_API_KEY ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL \
+                  ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+
+            url="${AGENT_PROVIDER_URL%/}"
+            url="${url%/v1}"
+            url="${url%/}"
+            export ANTHROPIC_BASE_URL="$url"
+            export ANTHROPIC_AUTH_TOKEN="${AGENT_PROVIDER_TOKEN:-local-endpoint-no-token}"
+            export ANTHROPIC_DEFAULT_OPUS_MODEL="$AGENT_PROVIDER_MODEL"
+            export ANTHROPIC_DEFAULT_SONNET_MODEL="$AGENT_PROVIDER_MODEL"
+            export ANTHROPIC_DEFAULT_HAIKU_MODEL="${AGENT_PROVIDER_SMALL_MODEL:-$AGENT_PROVIDER_MODEL}"
+
+            echo "h-agent: claude → $ANTHROPIC_BASE_URL (model: $AGENT_PROVIDER_MODEL)" >&2
+            ;;
+    esac
+fi
+
+skip="${AGENT_SKIP_PERMISSIONS:-1}"
+tools="${AGENT_CLAUDE_TOOLS-Bash Read Write Edit Glob Grep}"
+
+flags=()
+case "$cli" in
+    claude)
+        [ "$skip" = "1" ] && flags+=(--dangerously-skip-permissions)
+        # Shell splitting is intentional: each tool is a separate argument.
+        # shellcheck disable=SC2206
+        [ -n "$tools" ] && flags+=(--tools $tools)
+        ;;
+    agy)
+        [ "$skip" = "1" ] && flags+=(--dangerously-skip-permissions)
+        ;;
+    codex)
+        [ "$skip" = "1" ] && flags+=(--dangerously-bypass-approvals-and-sandbox)
+        ;;
+esac
+
+exec "$cli" "${flags[@]}" "$@"
