@@ -48,6 +48,49 @@ grep -Fqx 'echo '\''export PATH="$HOME/.local/bin:$PATH"'\'' >> "$HOME/.zshrc" &
 grep -Fqx 'claude 2.1.251' "$TEST_LOG"
 grep -Fqx 'codex --release 0.149.0 noninteractive=1' "$TEST_LOG"
 grep -Fqx "agy --dir $tmp/home/.local/bin" "$TEST_LOG"
+jq -e --arg cwd "$root" '
+    .hasCompletedOnboarding == true and
+    .projects[$cwd].hasTrustDialogAccepted == true and
+    .projects[$cwd].hasCompletedProjectOnboarding == true
+' "$tmp/home/.claude.json" >/dev/null
+jq -e '
+    .skipDangerousModePermissionPrompt == true and
+    .env.DISABLE_TELEMETRY == "1" and
+    .permissions.deny == ["mcp__*"]
+' "$tmp/home/.claude/settings.json" >/dev/null
+grep -Fqx 'check_for_update_on_startup = false' "$tmp/home/.codex/config.toml"
+grep -Fqx 'approval_policy = "never"' "$tmp/home/.codex/config.toml"
+grep -Fqx 'sandbox_mode = "danger-full-access"' "$tmp/home/.codex/config.toml"
+
+mkdir -p "$tmp/existing-home/.claude" "$tmp/existing-home/.codex"
+cat >"$tmp/existing-home/.claude.json" <<'EOF'
+{"hasCompletedOnboarding":false,"custom":"keep","projects":{"/custom":{"keep":true}}}
+EOF
+cat >"$tmp/existing-home/.claude/settings.json" <<'EOF'
+{"skipDangerousModePermissionPrompt":false,"custom":"keep","env":{"DISABLE_TELEMETRY":"0"}}
+EOF
+cat >"$tmp/existing-home/.codex/config.toml" <<'EOF'
+approval_policy = "on-request"
+
+[model_providers.custom]
+sandbox_mode = "read-only"
+EOF
+PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/existing-home" H_AGENT_INSTALL_CLIS=0 \
+    H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
+jq -e --arg cwd "$root" '
+    .hasCompletedOnboarding == false and .custom == "keep" and
+    .projects["/custom"].keep == true and
+    .projects[$cwd].hasTrustDialogAccepted == true
+' "$tmp/existing-home/.claude.json" >/dev/null
+jq -e '
+    .skipDangerousModePermissionPrompt == false and .custom == "keep" and
+    .env.DISABLE_TELEMETRY == "0" and
+    .env.DISABLE_ERROR_REPORTING == "1"
+' "$tmp/existing-home/.claude/settings.json" >/dev/null
+test "$(grep -Fc 'approval_policy = "on-request"' "$tmp/existing-home/.codex/config.toml")" -eq 1
+grep -Fqx 'check_for_update_on_startup = false' "$tmp/existing-home/.codex/config.toml"
+grep -Fqx 'sandbox_mode = "danger-full-access"' "$tmp/existing-home/.codex/config.toml"
+grep -Fqx 'sandbox_mode = "read-only"' "$tmp/existing-home/.codex/config.toml"
 
 before=$(wc -l <"$TEST_LOG")
 PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/home" \
@@ -59,10 +102,12 @@ fish_output=$(PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/fish-home" SHELL=/usr/bin
 # shellcheck disable=SC2016
 grep -Fqx 'echo '\''fish_add_path "$HOME/.local/bin"'\'' >> "$HOME/.config/fish/config.fish" && source "$HOME/.config/fish/config.fish"' <<<"$fish_output"
 
-PREFIX=/opt/h-agent DESTDIR="$tmp/stage" PATH="$tmp/bin:/usr/bin:/bin" \
+PREFIX=/opt/h-agent DESTDIR="$tmp/stage" PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/stage-home" \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
 test -x "$tmp/stage/opt/h-agent/bin/h-agent"
 test "$(wc -l <"$TEST_LOG")" -eq "$before"
+test ! -e "$tmp/stage-home/.claude.json"
+test ! -e "$tmp/stage-home/.codex/config.toml"
 
 if PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/wrong-agy" TEST_AGY_VERSION=1.1.23 \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null 2>&1; then
