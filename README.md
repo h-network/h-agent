@@ -20,6 +20,13 @@ Codex CLI `0.149.0`, and agy `1.1.22`—using their official installers. Already
 installed CLIs at those exact versions are left untouched. Installation does
 not require `sudo`.
 
+The installer also seeds unattended defaults in the invoking identity's
+`$HOME`: Claude's completed-onboarding state and settings, plus Codex's update,
+approval, and sandbox defaults. Missing values are added, but existing user
+values are never replaced. Project trust is granted only to the directory from
+which the installer is run. The installer does not create or switch users and
+works the same for root or any provisioned user/UID.
+
 Choose a different h-agent prefix or stage a package by setting the same
 variables supported by the Makefile:
 
@@ -32,7 +39,9 @@ Set `H_AGENT_VERSION` to install another Git ref, `H_AGENT_REPOSITORY` to use a
 fork, or `H_AGENT_INSTALL_URL` to download the executable from a custom URL.
 Set `H_AGENT_INSTALL_CLIS=0` to install only the wrapper. When `DESTDIR` is set,
 the installer stages only the wrapper and never changes the invoking user's CLI
-installations.
+installations or configuration. Set `H_AGENT_SEED_CONFIG=0` to leave CLI
+configuration untouched. Merging defaults into existing Claude JSON requires
+`jq`; without it, existing files are preserved and a warning is printed.
 
 System-wide (typically requires elevated permissions):
 

@@ -10,21 +10,22 @@ claude_version=2.1.251
 codex_version=0.149.0
 agy_version=1.1.22
 
-if [ -n "${PREFIX:-}" ]; then
-    prefix=$PREFIX
-elif [ -n "${HOME:-}" ]; then
-    prefix=${HOME%/}/.local
-else
-    detected_home=''
+if [ -z "${HOME:-}" ]; then
     if command -v getent >/dev/null 2>&1 && command -v id >/dev/null 2>&1; then
-        detected_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+        HOME=$(getent passwd "$(id -u)" | cut -d: -f6)
+        export HOME
     fi
-    if [ -z "$detected_home" ]; then
-        echo 'error: cannot determine a user-writable install prefix' >&2
-        echo '       set PREFIX (for example, PREFIX=/path/to/.local)' >&2
+    if [ -z "${HOME:-}" ]; then
+        echo "error: cannot determine the invoking identity's home directory" >&2
+        echo '       set HOME to the directory this identity should use' >&2
         exit 2
     fi
-    prefix=${detected_home%/}/.local
+fi
+
+if [ -n "${PREFIX:-}" ]; then
+    prefix=$PREFIX
+else
+    prefix=${HOME%/}/.local
 fi
 
 case "$prefix" in
@@ -165,6 +166,137 @@ print_path_instruction() {
     fi
 }
 
+seed_claude_state() {
+    local target=$HOME/.claude.json tmp escaped_pwd
+    if [ -s "$target" ]; then
+        if ! command -v jq >/dev/null 2>&1; then
+            echo "warning: preserving existing $target; install jq to merge h-agent defaults" >&2
+            return
+        fi
+        tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
+        if ! jq --arg cwd "$PWD" \
+            '{hasCompletedOnboarding: true,
+              projects: {($cwd): {
+                hasTrustDialogAccepted: true,
+                hasCompletedProjectOnboarding: true
+              }}} * .' "$target" >"$tmp"; then
+            rm -f "$tmp"
+            echo "error: existing $target is not valid JSON; leaving it unchanged" >&2
+            exit 1
+        fi
+        mv "$tmp" "$target"
+        return
+    fi
+    escaped_pwd=${PWD//\\/\\\\}
+    escaped_pwd=${escaped_pwd//\"/\\\"}
+    escaped_pwd=${escaped_pwd//$'\n'/\\n}
+    printf '{\n  "hasCompletedOnboarding": true,\n  "projects": {\n    "%s": {\n      "hasTrustDialogAccepted": true,\n      "hasCompletedProjectOnboarding": true\n    }\n  }\n}\n' \
+        "$escaped_pwd" >"$target"
+}
+
+seed_claude_settings() {
+    local target=$HOME/.claude/settings.json tmp
+    mkdir -p "$HOME/.claude"
+    if [ -s "$target" ]; then
+        if ! command -v jq >/dev/null 2>&1; then
+            echo "warning: preserving existing $target; install jq to merge h-agent defaults" >&2
+            return
+        fi
+        tmp=$(mktemp "$HOME/.claude/settings.json.tmp.XXXXXXXX")
+        if ! jq '
+            {promptSuggestionEnabled: false,
+             awaySummaryEnabled: false,
+             preferredNotifChannel: "notifications_disabled",
+             fileCheckpointingEnabled: false,
+             agentPushNotifEnabled: false,
+             skipDangerousModePermissionPrompt: true,
+             disableBundledSkills: true,
+             enableAllProjectMcpServers: false,
+             attribution: {commit: "", pr: "", sessionUrl: false},
+             permissions: {deny: ["mcp__*"]},
+             env: {
+               DISABLE_TELEMETRY: "1",
+               DISABLE_ERROR_REPORTING: "1",
+               DISABLE_FEEDBACK_COMMAND: "1",
+               CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1"
+             }} * .' "$target" >"$tmp"; then
+            rm -f "$tmp"
+            echo "error: existing $target is not valid JSON; leaving it unchanged" >&2
+            exit 1
+        fi
+        mv "$tmp" "$target"
+        return
+    fi
+    cat >"$target" <<'EOF'
+{
+  "promptSuggestionEnabled": false,
+  "awaySummaryEnabled": false,
+  "preferredNotifChannel": "notifications_disabled",
+  "fileCheckpointingEnabled": false,
+  "agentPushNotifEnabled": false,
+  "skipDangerousModePermissionPrompt": true,
+  "disableBundledSkills": true,
+  "enableAllProjectMcpServers": false,
+  "attribution": {"commit": "", "pr": "", "sessionUrl": false},
+  "permissions": {"deny": ["mcp__*"]},
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"
+  }
+}
+EOF
+}
+
+codex_has_top_level_key() {
+    awk -v key="$2" '
+        /^[[:space:]]*\[/ { in_table = 1 }
+        !in_table && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$1"
+}
+
+seed_codex_config() {
+    local target=$HOME/.codex/config.toml tmp additions=0
+    mkdir -p "$HOME/.codex"
+    if [ ! -e "$target" ]; then
+        cat >"$target" <<'EOF'
+check_for_update_on_startup = false
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+EOF
+        return
+    fi
+    tmp=$(mktemp "$HOME/.codex/config.toml.tmp.XXXXXXXX")
+    if ! codex_has_top_level_key "$target" check_for_update_on_startup; then
+        echo 'check_for_update_on_startup = false' >>"$tmp"
+        additions=1
+    fi
+    if ! codex_has_top_level_key "$target" approval_policy; then
+        echo 'approval_policy = "never"' >>"$tmp"
+        additions=1
+    fi
+    if ! codex_has_top_level_key "$target" sandbox_mode; then
+        echo 'sandbox_mode = "danger-full-access"' >>"$tmp"
+        additions=1
+    fi
+    if [ "$additions" = 1 ]; then
+        echo >>"$tmp"
+        cat "$target" >>"$tmp"
+        mv "$tmp" "$target"
+    else
+        rm -f "$tmp"
+    fi
+}
+
+seed_cli_config() {
+    umask 077
+    mkdir -p "$HOME"
+    seed_claude_state
+    seed_claude_settings
+    seed_codex_config
+}
 download_file "$url" "$download"
 
 if [ ! -s "$download" ] || ! head -n 1 "$download" | grep -q '^#!/usr/bin/env bash$'; then
@@ -177,6 +309,9 @@ if [ -z "$destdir" ] && [ "${H_AGENT_INSTALL_CLIS:-1}" = 1 ]; then
     install_claude
     install_codex
     install_agy
+fi
+if [ -z "$destdir" ] && [ "${H_AGENT_SEED_CONFIG:-1}" = 1 ]; then
+    seed_cli_config
 fi
 
 install -d "$bindir"
