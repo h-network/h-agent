@@ -15,9 +15,13 @@ Install for the current user with one command:
 curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh | bash
 ```
 
-This installs to `$HOME/.local/bin` and does not require `sudo`. Choose a
-different prefix or stage a package by setting the same variables supported by
-the Makefile:
+This installs `h-agent` plus its compatible CLI versions—Claude Code `2.1.251`,
+Codex CLI `0.149.0`, and agy `1.1.22`—using their official installers. Already
+installed CLIs at those exact versions are left untouched. Installation does
+not require `sudo`.
+
+Choose a different h-agent prefix or stage a package by setting the same
+variables supported by the Makefile:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh | \
@@ -26,6 +30,9 @@ curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh |
 
 Set `H_AGENT_VERSION` to install another Git ref, `H_AGENT_REPOSITORY` to use a
 fork, or `H_AGENT_INSTALL_URL` to download the executable from a custom URL.
+Set `H_AGENT_INSTALL_CLIS=0` to install only the wrapper. When `DESTDIR` is set,
+the installer stages only the wrapper and never changes the invoking user's CLI
+installations.
 
 System-wide (typically requires elevated permissions):
 
@@ -47,8 +54,9 @@ package, for example:
 make install DESTDIR=/tmp/package-root PREFIX=/usr
 ```
 
-The target machine must provide Bash 4 or newer and at least one supported
-agent CLI on `PATH`.
+The target machine must provide Bash 4 or newer. A Makefile installation does
+not install the agent CLIs; use the one-line installer above or provide a
+supported CLI on `PATH`.
 
 ## Use
 
@@ -79,7 +87,7 @@ any account and home directory:
 
 ```sh
 make test
-shellcheck h-agent test/h-agent-test
+shellcheck h-agent install.sh test/h-agent-test test/install-test
 ```
 
 ## License
