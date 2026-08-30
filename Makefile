@@ -16,3 +16,4 @@ uninstall:
 
 test:
 	./test/h-agent-test
+	./test/install-test

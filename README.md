@@ -9,6 +9,24 @@ and inherits that caller's `HOME` and configuration files.
 
 ## Install
 
+Install for the current user with one command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh | bash
+```
+
+This installs to `$HOME/.local/bin` and does not require `sudo`. Choose a
+different prefix or stage a package by setting the same variables supported by
+the Makefile:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh | \
+  PREFIX=/opt/h-agent DESTDIR=/tmp/package-root bash
+```
+
+Set `H_AGENT_VERSION` to install another Git ref, `H_AGENT_REPOSITORY` to use a
+fork, or `H_AGENT_INSTALL_URL` to download the executable from a custom URL.
+
 System-wide (typically requires elevated permissions):
 
 ```sh
