@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >>"$TEST_PROBE_LOG"
+args=" $* "
+case "$args" in
+    *'/v1/models '*)
+        [ "${TEST_PROBE_CASE:-success}" = ollama ] && exit 22
+        [ "${TEST_PROBE_CASE:-success}" = listfail ] && exit 22
+        printf '{"data":[{"id":"served-model"},{"id":"second-model"}]}'
+        ;;
+    *'/api/tags '*)
+        [ "${TEST_PROBE_CASE:-success}" = listfail ] && exit 22
+        printf '{"models":[{"name":"ollama-model"}]}'
+        ;;
+    *'/v1/messages '*)
+        output=''
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = -o ]; then output=$2; shift 2; else shift; fi
+        done
+        case "${TEST_PROBE_CASE:-success}" in
+            success|ollama) printf '{"type":"message"}' >"$output"; printf 200 ;;
+            timeout) exit 28 ;;
+            missing) printf '{"error":"missing"}' >"$output"; printf 404 ;;
+            invalid) printf '{"type":"error"}' >"$output"; printf 500 ;;
+        esac
+        ;;
+esac
+EOF
+chmod +x "$tmp/bin/curl"
+export PATH="$tmp/bin:$PATH"
+export TEST_PROBE_LOG=$tmp/curl.log
+
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+assert_has() { grep -Fq -- "$2" <<<"$1" || fail "missing: $2"; }
+
+output=$(AGENT_PROVIDER_TOKEN=secret "$root/h-agent" probeProvider http://localhost:8000/v1/ served-model)
+assert_has "$output" 'serves (from /v1/models):'
+assert_has "$output" 'USABLE by claude (model: served-model)'
+assert_has "$output" 'export AGENT_PROVIDER_URL=http://localhost:8000'
+assert_has "$output" 'export AGENT_PROVIDER_MODEL=served-model'
+grep -Fq -- '--max-time 10 http://localhost:8000/v1/models' "$TEST_PROBE_LOG"
+grep -Fq -- 'anthropic-version: 2023-06-01' "$TEST_PROBE_LOG"
+grep -Fq -- 'x-api-key: secret' "$TEST_PROBE_LOG"
+grep -Fq -- '"model":"served-model"' "$TEST_PROBE_LOG"
+
+output=$(TEST_PROBE_CASE=ollama "$root/h-agent" probe-provider http://localhost:8000)
+assert_has "$output" 'serves (from /api/tags):'
+assert_has "$output" 'model: ollama-model'
+
+if "$root/h-agent" probeProvider http://localhost:8000 absent >/dev/null 2>"$tmp/error"; then
+    fail 'accepted a model not served by the endpoint'
+fi
+grep -Fq "'absent' is not served" "$tmp/error"
+
+if TEST_PROBE_CASE=timeout PROBE_TIMEOUT=3 "$root/h-agent" probeProvider http://localhost:8000 \
+    >/dev/null 2>"$tmp/error"; then
+    fail 'accepted a timed-out endpoint'
+fi
+grep -Fq 'NO ANSWER within 3s' "$tmp/error"
+
+if TEST_PROBE_CASE=missing "$root/h-agent" probeProvider http://localhost:8000 \
+    >/dev/null 2>"$tmp/error"; then
+    fail 'accepted a missing Anthropic route'
+fi
+grep -Fq '/v1/messages returned 404 for a model this endpoint serves' "$tmp/error"
+
+if TEST_PROBE_CASE=invalid "$root/h-agent" probeProvider http://localhost:8000 \
+    >/dev/null 2>"$tmp/error"; then
+    fail 'accepted a non-Anthropic response'
+fi
+grep -Fq 'HTTP 500, and the reply was not an Anthropic message' "$tmp/error"
+
+if TEST_PROBE_CASE=listfail "$root/h-agent" probeProvider http://localhost:8000 \
+    >/dev/null 2>"$tmp/error"; then
+    fail 'accepted an endpoint whose models could not be listed'
+fi
+grep -Fq 'could not list models' "$tmp/error"
+
+if "$root/h-agent" probeProvider >/dev/null 2>&1; then
+    fail 'accepted a missing URL'
+else
+    test "$?" -eq 2 || fail 'missing URL did not exit 2'
+fi
+
+printf 'ok - provider probe behavior\n'

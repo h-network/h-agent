@@ -8,11 +8,14 @@ set -uo pipefail
 usage() {
     cat <<'EOF'
 usage: h-agent [claude|agy|codex] [args...]
+       h-agent probeProvider <url> [model-id]
 
   claude   --dangerously-skip-permissions, tools limited to
            Bash/Read/Write/Edit/Glob/Grep
   agy      --dangerously-skip-permissions
   codex    --dangerously-bypass-approvals-and-sandbox
+  probeProvider
+           verify that an endpoint serves Claude's Anthropic protocol
 
 With no CLI named, starts $AGENT_CLI (default: claude).
 Any further arguments are passed straight to the chosen CLI.
@@ -34,6 +37,119 @@ h-agent inherits the invoking user's environment, including HOME. Install it
 under any account; no runtime username or home directory is built in.
 EOF
 }
+
+probe_provider_usage() {
+    cat <<'EOF'
+usage: h-agent probeProvider <url> [model-id]
+
+Discover models from /v1/models or /api/tags, then verify that the endpoint
+serves the Anthropic /v1/messages protocol. Requires curl and jq.
+
+Environment:
+  PROBE_TIMEOUT         message probe timeout in seconds (default: 90)
+  AGENT_PROVIDER_TOKEN  optional endpoint token
+EOF
+}
+
+probe_provider() {
+    case "${1:-}" in
+        -h|--help|help) probe_provider_usage; return 0 ;;
+        "") probe_provider_usage >&2; return 2 ;;
+    esac
+    if [ "$#" -gt 2 ]; then
+        probe_provider_usage >&2
+        return 2
+    fi
+    for dependency in curl jq; do
+        if ! command -v "$dependency" >/dev/null 2>&1; then
+            echo "error: probeProvider requires $dependency" >&2
+            return 1
+        fi
+    done
+
+    local url=$1 requested_model=${2:-} timeout=${PROBE_TIMEOUT:-90}
+    local token=${AGENT_PROVIDER_TOKEN:-local-endpoint-no-token}
+    local list_timeout=10 models= route= response http_status curl_status payload probe_model
+    local tmpdir
+    url=${url%/}
+    url=${url%/v1}
+    url=${url%/}
+
+    response=$(curl -fsS --max-time "$list_timeout" "$url/v1/models" 2>/dev/null || true)
+    if [ -n "$response" ]; then
+        models=$(printf '%s' "$response" | jq -r '.data[]?.id | select(type == "string" and length > 0)' 2>/dev/null || true)
+    fi
+    if [ -n "$models" ]; then
+        route=/v1/models
+    else
+        response=$(curl -fsS --max-time "$list_timeout" "$url/api/tags" 2>/dev/null || true)
+        if [ -n "$response" ]; then
+            models=$(printf '%s' "$response" | jq -r '.models[]?.name | select(type == "string" and length > 0)' 2>/dev/null || true)
+        fi
+        [ -n "$models" ] && route=/api/tags
+    fi
+    if [ -z "$models" ]; then
+        echo "NOT USABLE — could not list models from $url/v1/models or $url/api/tags" >&2
+        return 1
+    fi
+
+    printf 'serves (from %s):\n' "$route"
+    printf '%s\n' "$models" | sed 's/^/  /'
+    if [ -n "$requested_model" ]; then
+        if ! grep -Fqx -- "$requested_model" <<<"$models"; then
+            echo "error: '$requested_model' is not served by this endpoint" >&2
+            return 1
+        fi
+        probe_model=$requested_model
+    else
+        probe_model=$(head -n 1 <<<"$models")
+    fi
+
+    payload=$(jq -nc --arg model "$probe_model" \
+        '{model: $model, max_tokens: 1, messages: [{role: "user", content: "hi"}]}') || return 1
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/h-agent-probe.XXXXXXXX") || return 1
+    response=$tmpdir/response
+    trap 'rm -rf "$tmpdir"' RETURN
+    if http_status=$(curl -sS --max-time "$timeout" -o "$response" -w '%{http_code}' \
+        -X POST "$url/v1/messages" \
+        -H 'content-type: application/json' \
+        -H 'anthropic-version: 2023-06-01' \
+        -H "x-api-key: $token" \
+        --data "$payload"); then
+        curl_status=0
+    else
+        curl_status=$?
+    fi
+
+    if [ "$curl_status" -eq 28 ]; then
+        echo "NO ANSWER within ${timeout}s — the model may still be loading (cold start)" >&2
+        return 1
+    fi
+    if [ "$curl_status" -ne 0 ]; then
+        echo "NOT USABLE — request to $url/v1/messages failed (curl exit $curl_status)" >&2
+        return 1
+    fi
+    if [ "$http_status" = 200 ] && jq -e '.type == "message"' "$response" >/dev/null 2>&1; then
+        echo "USABLE by claude (model: $probe_model)"
+        printf 'export AGENT_PROVIDER_URL=%q\n' "$url"
+        printf 'export AGENT_PROVIDER_MODEL=%q\n' "$probe_model"
+        [ -n "${AGENT_PROVIDER_TOKEN:-}" ] && printf 'export AGENT_PROVIDER_TOKEN=%q\n' "$AGENT_PROVIDER_TOKEN"
+        return 0
+    fi
+    if [ "$http_status" = 404 ]; then
+        echo "NOT USABLE — /v1/messages returned 404 for a model this endpoint serves" >&2
+        return 1
+    fi
+    echo "NOT USABLE — HTTP $http_status, and the reply was not an Anthropic message" >&2
+    sed -n '1,10{s/^/  /;p;}' "$response" >&2
+    return 1
+}
+
+if [ "${1:-}" = probeProvider ] || [ "${1:-}" = probe-provider ]; then
+    shift
+    probe_provider "$@"
+    exit $?
+fi
 
 cli="${AGENT_CLI:-claude}"
 case "${1:-}" in

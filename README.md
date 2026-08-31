@@ -74,6 +74,8 @@ h-agent                 # AGENT_CLI, or claude by default
 h-agent claude --resume
 h-agent agy
 h-agent codex
+h-agent probeProvider http://localhost:8000
+h-agent probeProvider http://localhost:8000 my-model
 h-agent --help
 ```
 
@@ -91,6 +93,31 @@ any account and home directory:
 - `AGENT_PROVIDER_MODEL`: model exposed by the endpoint
 - `AGENT_PROVIDER_SMALL_MODEL`: optional smaller model
 - `AGENT_PROVIDER_TOKEN`: optional endpoint token
+
+### Probe a local provider
+
+`h-agent probeProvider <url> [model-id]` checks that a local endpoint is
+actually usable by Claude Code. It discovers models from the OpenAI-compatible
+`/v1/models` route, falling back to Ollama's `/api/tags`, and then sends a real
+Anthropic-protocol request to `/v1/messages`. Passing a model ID verifies that
+the endpoint lists that exact model before probing it; otherwise the first
+discovered model is used.
+
+The probe distinguishes a cold-load timeout, a missing Anthropic route, and an
+HTTP response that is not an Anthropic message. On success it prints shell
+exports for `AGENT_PROVIDER_URL` and `AGENT_PROVIDER_MODEL` (and
+`AGENT_PROVIDER_TOKEN` when supplied). The command exits 0 when verified, 1
+when unusable, and 2 for invalid usage.
+
+The diagnostic requires `curl` and `jq`. Model listing uses a 10-second
+timeout. Set `PROBE_TIMEOUT` to change the message-probe timeout from its
+90-second default, and set `AGENT_PROVIDER_TOKEN` when the endpoint requires an
+API key:
+
+```sh
+PROBE_TIMEOUT=180 AGENT_PROVIDER_TOKEN=local-secret \
+  h-agent probeProvider http://localhost:8000/v1
+```
 
 ## Develop
 
