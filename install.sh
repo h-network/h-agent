@@ -204,7 +204,9 @@ seed_claude_settings() {
         fi
         tmp=$(mktemp "$HOME/.claude/settings.json.tmp.XXXXXXXX")
         if ! jq '
-            {promptSuggestionEnabled: false,
+            {outputStyle: "Concise",
+             autoUpdates: false,
+             promptSuggestionEnabled: false,
              awaySummaryEnabled: false,
              preferredNotifChannel: "notifications_disabled",
              fileCheckpointingEnabled: false,
@@ -229,6 +231,8 @@ seed_claude_settings() {
     fi
     cat >"$target" <<'EOF'
 {
+  "outputStyle": "Concise",
+  "autoUpdates": false,
   "promptSuggestionEnabled": false,
   "awaySummaryEnabled": false,
   "preferredNotifChannel": "notifications_disabled",
@@ -265,6 +269,7 @@ seed_codex_config() {
 check_for_update_on_startup = false
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+feedback = false
 EOF
         return
     fi
@@ -279,6 +284,10 @@ EOF
     fi
     if ! codex_has_top_level_key "$target" sandbox_mode; then
         echo 'sandbox_mode = "danger-full-access"' >>"$tmp"
+        additions=1
+    fi
+    if ! codex_has_top_level_key "$target" feedback; then
+        echo 'feedback = false' >>"$tmp"
         additions=1
     fi
     if [ "$additions" = 1 ]; then

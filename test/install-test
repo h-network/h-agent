@@ -66,6 +66,8 @@ jq -e --arg cwd "$root" '
     .projects[$cwd].hasCompletedProjectOnboarding == true
 ' "$tmp/home/.claude.json" >/dev/null
 jq -e '
+    .outputStyle == "Concise" and
+    .autoUpdates == false and
     .skipDangerousModePermissionPrompt == true and
     .env.DISABLE_TELEMETRY == "1" and
     .permissions.deny == ["mcp__*"]
@@ -73,16 +75,18 @@ jq -e '
 grep -Fqx 'check_for_update_on_startup = false' "$tmp/home/.codex/config.toml"
 grep -Fqx 'approval_policy = "never"' "$tmp/home/.codex/config.toml"
 grep -Fqx 'sandbox_mode = "danger-full-access"' "$tmp/home/.codex/config.toml"
+grep -Fqx 'feedback = false' "$tmp/home/.codex/config.toml"
 
 mkdir -p "$tmp/existing-home/.claude" "$tmp/existing-home/.codex"
 cat >"$tmp/existing-home/.claude.json" <<'EOF'
 {"hasCompletedOnboarding":false,"custom":"keep","projects":{"/custom":{"keep":true}}}
 EOF
 cat >"$tmp/existing-home/.claude/settings.json" <<'EOF'
-{"skipDangerousModePermissionPrompt":false,"custom":"keep","env":{"DISABLE_TELEMETRY":"0"}}
+{"outputStyle":"Explanatory","autoUpdates":true,"skipDangerousModePermissionPrompt":false,"custom":"keep","env":{"DISABLE_TELEMETRY":"0"}}
 EOF
 cat >"$tmp/existing-home/.codex/config.toml" <<'EOF'
 approval_policy = "on-request"
+feedback = true
 
 [model_providers.custom]
 sandbox_mode = "read-only"
@@ -95,6 +99,7 @@ jq -e --arg cwd "$root" '
     .projects[$cwd].hasTrustDialogAccepted == true
 ' "$tmp/existing-home/.claude.json" >/dev/null
 jq -e '
+    .outputStyle == "Explanatory" and .autoUpdates == true and
     .skipDangerousModePermissionPrompt == false and .custom == "keep" and
     .env.DISABLE_TELEMETRY == "0" and
     .env.DISABLE_ERROR_REPORTING == "1"
@@ -103,11 +108,19 @@ test "$(grep -Fc 'approval_policy = "on-request"' "$tmp/existing-home/.codex/con
 grep -Fqx 'check_for_update_on_startup = false' "$tmp/existing-home/.codex/config.toml"
 grep -Fqx 'sandbox_mode = "danger-full-access"' "$tmp/existing-home/.codex/config.toml"
 grep -Fqx 'sandbox_mode = "read-only"' "$tmp/existing-home/.codex/config.toml"
+test "$(grep -Fc 'feedback = true' "$tmp/existing-home/.codex/config.toml")" -eq 1
+if grep -Fqx 'feedback = false' "$tmp/existing-home/.codex/config.toml"; then
+    echo 'not ok - existing Codex feedback setting was overridden' >&2
+    exit 1
+fi
 
 before=$(wc -l <"$TEST_LOG")
 PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/home" \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
 test "$(wc -l <"$TEST_LOG")" -eq "$before"
+jq -e '.outputStyle == "Concise" and .autoUpdates == false' \
+    "$tmp/home/.claude/settings.json" >/dev/null
+test "$(grep -Fc 'feedback = false' "$tmp/home/.codex/config.toml")" -eq 1
 
 fish_output=$(PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/fish-home" SHELL=/usr/bin/fish \
     H_AGENT_INSTALL_CLIS=0 H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh")
