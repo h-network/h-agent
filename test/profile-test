@@ -77,10 +77,11 @@ out=$(HOME="$home" "$root/seedProfile" codex expform)
 [[ "$out" == "CODEX_HOME=$home/.codex-expform" ]] || \
     fail "seedProfile plain form was: $out"
 
-# --- seedProfile: scoped claude trust (only /workspace, non-clobbering) --
+# --- seedProfile: scoped claude trust (only /workspace, non-clobbering,
+#     defaults to trusted when absent) -------------------------------------
 mkdir -p "$home/.claude-scoped"
 cat >"$home/.claude.json" <<'EOF'
-{"hasCompletedOnboarding":false,"projects":{"/workspace":{"hasTrustDialogAccepted":false},"/other":{"secret":"x"}}}
+{"hasCompletedOnboarding":false,"projects":{"/workspace":{},"/other":{"secret":"x"}}}
 EOF
 HOME="$home" "$root/seedProfile" claude scoped >/dev/null
 jq -e '
@@ -89,6 +90,20 @@ jq -e '
     .projects["/workspace"].hasCompletedProjectOnboarding == true and
     (.projects | has("/other") | not)
 ' "$home/.claude-scoped/.claude.json" >/dev/null || fail 'seedProfile scoped trust seeding was wrong'
+
+# --- seedProfile: an explicitly revoked /workspace trust must not be
+#     silently flipped to trusted (a seeded profile must never end up MORE
+#     trusted than the source it's inheriting from) -----------------------
+mkdir -p "$home/.claude-revoked"
+cat >"$home/.claude.json" <<'EOF'
+{"projects":{"/workspace":{"hasTrustDialogAccepted":false,"hasCompletedProjectOnboarding":false}}}
+EOF
+HOME="$home" "$root/seedProfile" claude revoked >/dev/null
+jq -e '
+    .projects["/workspace"].hasTrustDialogAccepted == false and
+    .projects["/workspace"].hasCompletedProjectOnboarding == false
+' "$home/.claude-revoked/.claude.json" >/dev/null || \
+    fail 'seedProfile flipped an explicitly revoked /workspace trust to true'
 
 # --- setupConfigDir: onboarding-only seed, no trust scoping --------------
 home=$(fresh_home onboardonly)

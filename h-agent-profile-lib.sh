@@ -70,8 +70,10 @@ hap_seed_claude_onboarding_scoped() {
             '{hasCompletedOnboarding: true,
               projects: (.projects // {} | with_entries(
                   select(.key == $path)
-                  | .value |= {hasTrustDialogAccepted: (.hasTrustDialogAccepted // true),
-                               hasCompletedProjectOnboarding: (.hasCompletedProjectOnboarding // true)}))}' \
+                  | .value |= {hasTrustDialogAccepted:
+                                   (if .hasTrustDialogAccepted == null then true else .hasTrustDialogAccepted end),
+                               hasCompletedProjectOnboarding:
+                                   (if .hasCompletedProjectOnboarding == null then true else .hasCompletedProjectOnboarding end)}))}' \
         >"$dst_dir/.claude.json"
 }
 
