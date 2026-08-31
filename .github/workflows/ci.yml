@@ -20,7 +20,7 @@ jobs:
         run: |
           shellcheck h-agent install.sh seedProfile setupConfigDir \
             h-agent-profile-lib.sh test/h-agent-test test/install-test \
-            test/profile-test
+            test/profile-test test/probe-provider-test
 
       - name: Run tests
         run: make test
