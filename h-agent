@@ -69,7 +69,8 @@ probe_provider() {
 
     local url=$1 requested_model=${2:-} timeout=${PROBE_TIMEOUT:-90}
     local token=${AGENT_PROVIDER_TOKEN:-local-endpoint-no-token}
-    local list_timeout=10 models= route= response http_status curl_status payload probe_model
+    local list_timeout=10
+    local models='' route='' response http_status curl_status payload probe_model
     local tmpdir
     url=${url%/}
     url=${url%/v1}
