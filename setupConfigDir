@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 h-network
+#
+# setupConfigDir — interactive named-profile switching. Prints eval-able
+# output on stdout; all progress/notes go to stderr, so
+#
+#   eval "$(setupConfigDir myname)"
+#
+# switches the current shell without leaking anything but the export lines
+# into it. See seedProfile for the noninteractive, subprocess-friendly form.
+set -uo pipefail
+
+usage() {
+    cat <<'EOF'
+usage: setupConfigDir [<name>] [--same]
+
+  <name>     create/select an isolated profile pair:
+               ~/.claude-<name>  (CLAUDE_CONFIG_DIR)
+               ~/.codex-<name>   (CODEX_HOME)
+             Seeded with a copy of the default profile -- settings, skills,
+             agents -- but not session history or logins. agy is not
+             included (see the note printed on stderr).
+
+  --same     also copy the existing logins across, so the CLI does not ask
+             you to authenticate again.
+
+  default    switch back to ~/.claude and ~/.codex (also: 'shared').
+
+  (no args)  show which config dirs are currently selected.
+
+This command does not modify your shell itself -- eval its output to apply
+it:
+
+    eval "$(setupConfigDir myname)"
+    eval "$(setupConfigDir default)"
+EOF
+}
+
+lib_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=h-agent-profile-lib.sh
+. "$lib_dir/h-agent-profile-lib.sh"
+
+name="" same=0
+for arg in "$@"; do
+    case "$arg" in
+        --same|--same-account) same=1 ;;
+        -h|--help|help) usage; exit 0 ;;
+        -*) echo "error: unknown option '$arg' (try --help)" >&2; exit 2 ;;
+        *) [ -z "$name" ] && name="$arg" ;;
+    esac
+done
+
+if [ -z "$name" ]; then
+    echo "claude : ${CLAUDE_CONFIG_DIR:-$HOME/.claude (default)}"
+    echo "codex  : ${CODEX_HOME:-$HOME/.codex (default)}"
+    echo "usage: setupConfigDir <name>   # e.g. 'work' -> ~/.claude-work + ~/.codex-work"
+    echo "       setupConfigDir --help"
+    exit 0
+fi
+
+if [ "$name" = "default" ] || [ "$name" = "shared" ]; then
+    echo "unset CLAUDE_CONFIG_DIR"
+    echo "unset CODEX_HOME"
+    echo "back on \$HOME/.claude and \$HOME/.codex." >&2
+    exit 0
+fi
+
+name=$(hap_validate_profile_name "$name") || exit 2
+
+cdir="$HOME/.claude-$name"
+xdir="$HOME/.codex-$name"
+
+echo "claude -> ${cdir/#$HOME/\~}" >&2
+hap_copy_profile_assets "$HOME/.claude" "$cdir" settings.json skills agents CLAUDE.md || exit 1
+hap_seed_claude_onboarding "$cdir"
+
+echo "codex  -> ${xdir/#$HOME/\~}" >&2
+hap_copy_profile_assets "$HOME/.codex" "$xdir" config.toml AGENTS.md || exit 1
+
+hap_agy_refusal
+
+if [ "$same" -eq 1 ]; then
+    hap_copy_credential "$HOME/.claude/.credentials.json" "$cdir/.credentials.json" \
+        || echo "warning: --same given but ~/.claude/.credentials.json does not exist" >&2
+    hap_copy_credential "$HOME/.codex/auth.json" "$xdir/auth.json" \
+        || echo "warning: --same given but ~/.codex/auth.json does not exist" >&2
+elif [ ! -f "$cdir/.credentials.json" ]; then
+    echo "  no login copied -- the CLI will ask you to authenticate (--same copies it)" >&2
+fi
+
+echo "export CLAUDE_CONFIG_DIR=$cdir"
+echo "export CODEX_HOME=$xdir"

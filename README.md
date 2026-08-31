@@ -36,12 +36,17 @@ curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh |
 ```
 
 Set `H_AGENT_VERSION` to install another Git ref, `H_AGENT_REPOSITORY` to use a
-fork, or `H_AGENT_INSTALL_URL` to download the executable from a custom URL.
-Set `H_AGENT_INSTALL_CLIS=0` to install only the wrapper. When `DESTDIR` is set,
-the installer stages only the wrapper and never changes the invoking user's CLI
-installations or configuration. Set `H_AGENT_SEED_CONFIG=0` to leave CLI
-configuration untouched. Merging defaults into existing Claude JSON requires
-`jq`; without it, existing files are preserved and a warning is printed.
+fork, or `H_AGENT_INSTALL_URL` to download `h-agent` itself from a custom URL.
+`seedProfile`, `setupConfigDir`, and their shared library download as siblings
+of that URL by default (same directory, their own filenames); override them
+individually with `H_AGENT_SEEDPROFILE_URL`, `H_AGENT_SETUPCONFIGDIR_URL`, and
+`H_AGENT_PROFILELIB_URL` if they live elsewhere.
+Set `H_AGENT_INSTALL_CLIS=0` to install only the h-agent scripts, without any
+CLI. When `DESTDIR` is set, the installer stages only those scripts and never
+changes the invoking user's CLI installations or configuration. Set
+`H_AGENT_SEED_CONFIG=0` to leave CLI configuration untouched. Merging defaults
+into existing Claude JSON requires `jq`; without it, existing files are
+preserved and a warning is printed.
 
 System-wide (typically requires elevated permissions):
 
@@ -119,11 +124,47 @@ PROBE_TIMEOUT=180 AGENT_PROVIDER_TOKEN=local-secret \
   h-agent probeProvider http://localhost:8000/v1
 ```
 
+### Named profiles
+
+By default every CLI shares one profile at `$HOME/.claude` / `$HOME/.codex`.
+Two commands, installed alongside `h-agent`, create isolated, named copies of
+that default profile — for running multiple concurrent agents on one host
+without them sharing config, skills, or (unless asked) logins. Neither ever
+overwrites a file that already exists in the target profile, so re-running
+either is always safe.
+
+`setupConfigDir` is interactive: it prints `export`/`unset` lines for you to
+`eval`, so it can switch your current shell.
+
+```sh
+eval "$(setupConfigDir work)"     # ~/.claude-work + ~/.codex-work, no login
+eval "$(setupConfigDir work --same)"  # ...and copy today's logins across
+eval "$(setupConfigDir default)"  # back to the shared ~/.claude + ~/.codex
+setupConfigDir                    # show what this shell is currently on
+```
+
+`seedProfile` is noninteractive, for subprocesses and automation — one CLI
+per call, printing the resulting variable rather than exporting it itself.
+Login credentials are never copied; a seeded profile is unauthenticated by
+design.
+
+```sh
+seedProfile claude ci-run           # CLAUDE_CONFIG_DIR=/home/you/.claude-ci-run
+seedProfile --export codex ci-run   # export CODEX_HOME=/home/you/.codex-ci-run
+```
+
+Both validate the profile name (no path traversal, alphanumeric/`.`/`_`/`-`
+only) and refuse `agy`: it has no config-dir override of its own (it reads
+`~/.gemini/antigravity-cli` straight off `HOME`), so isolating it would mean
+splitting `HOME` entirely rather than pointing an env var elsewhere.
+
 ## Develop
 
 ```sh
 make test
-shellcheck h-agent install.sh test/h-agent-test test/install-test
+shellcheck h-agent install.sh seedProfile setupConfigDir \
+    h-agent-profile-lib.sh test/h-agent-test test/install-test \
+    test/profile-test
 ```
 
 ## License

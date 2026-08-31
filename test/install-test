@@ -26,6 +26,12 @@ fi
 case "$url" in
     https://example.invalid/h-agent)
         body='echo installed-test-agent' ;;
+    https://example.invalid/seedProfile)
+        body='echo installed-test-seedProfile' ;;
+    https://example.invalid/setupConfigDir)
+        body='echo installed-test-setupConfigDir' ;;
+    https://example.invalid/h-agent-profile-lib.sh)
+        body='echo installed-test-profile-lib' ;;
     https://claude.ai/install.sh)
         body='printf "claude %s\\n" "$*" >>"$TEST_LOG"; mkdir -p "$HOME/.local/bin"; printf "#!/usr/bin/env bash\\necho 2.1.251 \\(Claude Code\\)\\n" >"$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"' ;;
     https://chatgpt.com/codex/install.sh)
@@ -42,6 +48,12 @@ output=$(PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/home" SHELL=/bin/zsh \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh")
 test -x "$tmp/home/.local/bin/h-agent"
 test "$("$tmp/home/.local/bin/h-agent")" = installed-test-agent
+test -x "$tmp/home/.local/bin/seedProfile"
+test "$("$tmp/home/.local/bin/seedProfile")" = installed-test-seedProfile
+test -x "$tmp/home/.local/bin/setupConfigDir"
+test "$("$tmp/home/.local/bin/setupConfigDir")" = installed-test-setupConfigDir
+test -x "$tmp/home/.local/bin/h-agent-profile-lib.sh"
+test "$("$tmp/home/.local/bin/h-agent-profile-lib.sh")" = installed-test-profile-lib
 # These variables must remain literal in the printed command.
 # shellcheck disable=SC2016
 grep -Fqx 'echo '\''export PATH="$HOME/.local/bin:$PATH"'\'' >> "$HOME/.zshrc" && source "$HOME/.zshrc"' <<<"$output"
@@ -105,6 +117,9 @@ grep -Fqx 'echo '\''fish_add_path "$HOME/.local/bin"'\'' >> "$HOME/.config/fish/
 PREFIX=/opt/h-agent DESTDIR="$tmp/stage" PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/stage-home" \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
 test -x "$tmp/stage/opt/h-agent/bin/h-agent"
+test -x "$tmp/stage/opt/h-agent/bin/seedProfile"
+test -x "$tmp/stage/opt/h-agent/bin/setupConfigDir"
+test -x "$tmp/stage/opt/h-agent/bin/h-agent-profile-lib.sh"
 test "$(wc -l <"$TEST_LOG")" -eq "$before"
 test ! -e "$tmp/stage-home/.claude.json"
 test ! -e "$tmp/stage-home/.codex/config.toml"

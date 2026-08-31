@@ -297,12 +297,24 @@ seed_cli_config() {
     seed_claude_settings
     seed_codex_config
 }
-download_file "$url" "$download"
+base_download_url=${url%/h-agent}
+seedprofile_url=${H_AGENT_SEEDPROFILE_URL:-$base_download_url/seedProfile}
+setupconfigdir_url=${H_AGENT_SETUPCONFIGDIR_URL:-$base_download_url/setupConfigDir}
+profilelib_url=${H_AGENT_PROFILELIB_URL:-$base_download_url/h-agent-profile-lib.sh}
 
-if [ ! -s "$download" ] || ! head -n 1 "$download" | grep -q '^#!/usr/bin/env bash$'; then
-    echo "error: download from $url is not an h-agent executable" >&2
-    exit 1
-fi
+download_verified() {
+    local from=$1 to=$2
+    download_file "$from" "$to"
+    if [ ! -s "$to" ] || ! head -n 1 "$to" | grep -q '^#!/usr/bin/env bash$'; then
+        echo "error: download from $from is not an h-agent script" >&2
+        exit 1
+    fi
+}
+
+download_verified "$url" "$download"
+download_verified "$seedprofile_url" "$tmpdir/seedProfile"
+download_verified "$setupconfigdir_url" "$tmpdir/setupConfigDir"
+download_verified "$profilelib_url" "$tmpdir/h-agent-profile-lib.sh"
 
 # DESTDIR means package staging: never mutate the invoking user's CLI installs.
 if [ -z "$destdir" ] && [ "${H_AGENT_INSTALL_CLIS:-1}" = 1 ]; then
@@ -316,6 +328,9 @@ fi
 
 install -d "$bindir"
 install -m 0755 "$download" "$bindir/h-agent"
+install -m 0755 "$tmpdir/seedProfile" "$bindir/seedProfile"
+install -m 0755 "$tmpdir/setupConfigDir" "$bindir/setupConfigDir"
+install -m 0755 "$tmpdir/h-agent-profile-lib.sh" "$bindir/h-agent-profile-lib.sh"
 
 echo "installed h-agent to $bindir/h-agent"
 if [ -z "$destdir" ]; then

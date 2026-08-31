@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+
+fresh_home() {
+    local home="$tmp/$1"
+    mkdir -p "$home/.claude/skills" "$home/.codex"
+    echo '{"settings":"default"}' >"$home/.claude/settings.json"
+    echo 'a-skill' >"$home/.claude/skills/a-skill"
+    echo 'approval_policy = "never"' >"$home/.codex/config.toml"
+    printf '%s\n' "$home"
+}
+
+# --- seedProfile: path traversal is rejected ---------------------------
+home=$(fresh_home traversal)
+if HOME="$home" "$root/seedProfile" claude '../etc' >/dev/null 2>&1; then
+    fail 'seedProfile accepted a path-traversal name'
+fi
+out=$(HOME="$home" "$root/seedProfile" claude '../etc' 2>&1) || true
+[[ "$out" == *".."* ]] || fail 'seedProfile traversal error did not mention ..'
+
+# --- setupConfigDir: path traversal is rejected -------------------------
+if HOME="$home" "$root/setupConfigDir" '../etc' >/dev/null 2>&1; then
+    fail 'setupConfigDir accepted a path-traversal name'
+fi
+
+# --- seedProfile: agy is refused with exit 3 -----------------------------
+set +e
+HOME="$home" "$root/seedProfile" agy x >/dev/null 2>/dev/null
+status=$?
+set -e
+[ "$status" -eq 3 ] || fail "seedProfile agy exit was $status, expected 3"
+err=$(HOME="$home" "$root/seedProfile" agy x 2>&1 >/dev/null) || true
+[[ "$err" == *"config-dir override"* ]] || fail 'seedProfile agy refusal message missing'
+
+# --- setupConfigDir: agy note is printed (non-fatal) ---------------------
+home=$(fresh_home agynote)
+out=$(HOME="$home" "$root/setupConfigDir" foo 2>&1 >/dev/null)
+[[ "$out" == *"config-dir override"* ]] || fail 'setupConfigDir agy note missing'
+
+# --- seedProfile: unknown CLI is exit 2, not 3 ---------------------------
+set +e
+HOME="$home" "$root/seedProfile" bogus x >/dev/null 2>/dev/null
+status=$?
+set -e
+[ "$status" -eq 2 ] || fail "seedProfile unknown-cli exit was $status, expected 2"
+
+# --- seedProfile: copy-if-absent / idempotence ---------------------------
+home=$(fresh_home idempotent)
+HOME="$home" "$root/seedProfile" claude work >/dev/null
+[ -f "$home/.claude-work/settings.json" ] || fail 'seedProfile did not seed settings.json'
+[ -f "$home/.claude-work/skills/a-skill" ] || fail 'seedProfile did not seed skills/'
+echo 'modified' >"$home/.claude-work/settings.json"
+HOME="$home" "$root/seedProfile" claude work >/dev/null
+[ "$(cat "$home/.claude-work/settings.json")" = modified ] || \
+    fail 'seedProfile clobbered an existing profile file on re-run'
+
+# --- seedProfile: never copies credentials -------------------------------
+echo '{"tok":"secret"}' >"$home/.claude/.credentials.json"
+echo '{"tok":"secret"}' >"$home/.codex/auth.json"
+rm -rf "$home/.claude-creds" "$home/.codex-creds"
+HOME="$home" "$root/seedProfile" claude creds >/dev/null
+HOME="$home" "$root/seedProfile" codex creds >/dev/null
+[ -f "$home/.claude-creds/.credentials.json" ] && fail 'seedProfile copied claude credentials'
+[ -f "$home/.codex-creds/auth.json" ] && fail 'seedProfile copied codex credentials'
+
+# --- seedProfile: --export form ------------------------------------------
+out=$(HOME="$home" "$root/seedProfile" --export codex expform)
+[[ "$out" == "export CODEX_HOME=$home/.codex-expform" ]] || \
+    fail "seedProfile --export form was: $out"
+out=$(HOME="$home" "$root/seedProfile" codex expform)
+[[ "$out" == "CODEX_HOME=$home/.codex-expform" ]] || \
+    fail "seedProfile plain form was: $out"
+
+# --- seedProfile: scoped claude trust (only /workspace, non-clobbering) --
+mkdir -p "$home/.claude-scoped"
+cat >"$home/.claude.json" <<'EOF'
+{"hasCompletedOnboarding":false,"projects":{"/workspace":{"hasTrustDialogAccepted":false},"/other":{"secret":"x"}}}
+EOF
+HOME="$home" "$root/seedProfile" claude scoped >/dev/null
+jq -e '
+    .hasCompletedOnboarding == true and
+    .projects["/workspace"].hasTrustDialogAccepted == true and
+    .projects["/workspace"].hasCompletedProjectOnboarding == true and
+    (.projects | has("/other") | not)
+' "$home/.claude-scoped/.claude.json" >/dev/null || fail 'seedProfile scoped trust seeding was wrong'
+
+# --- setupConfigDir: onboarding-only seed, no trust scoping --------------
+home=$(fresh_home onboardonly)
+HOME="$home" "$root/setupConfigDir" foo >/dev/null 2>/dev/null
+jq -e '.hasCompletedOnboarding == true and (has("projects") | not)' \
+    "$home/.claude-foo/.claude.json" >/dev/null || \
+    fail 'setupConfigDir onboarding seed was wrong'
+
+# --- setupConfigDir: credentials only copied with --same -----------------
+home=$(fresh_home credpolicy)
+echo '{"tok":"secret"}' >"$home/.claude/.credentials.json"
+echo '{"tok":"secret"}' >"$home/.codex/auth.json"
+HOME="$home" "$root/setupConfigDir" nocreds >/dev/null 2>/dev/null
+[ -f "$home/.claude-nocreds/.credentials.json" ] && fail 'setupConfigDir copied creds without --same'
+[ -f "$home/.codex-nocreds/auth.json" ] && fail 'setupConfigDir copied codex creds without --same'
+HOME="$home" "$root/setupConfigDir" withcreds --same >/dev/null 2>/dev/null
+[ -f "$home/.claude-withcreds/.credentials.json" ] || fail '--same did not copy claude creds'
+[ -f "$home/.codex-withcreds/auth.json" ] || fail '--same did not copy codex creds'
+perm=$(stat -c '%a' "$home/.claude-withcreds/.credentials.json")
+[ "$perm" = 600 ] || fail "copied credential permissions were $perm, expected 600"
+
+# --- setupConfigDir: reset/export forms -----------------------------------
+out=$(HOME="$home" "$root/setupConfigDir" default 2>/dev/null)
+[[ "$out" == $'unset CLAUDE_CONFIG_DIR\nunset CODEX_HOME' ]] || \
+    fail "setupConfigDir default reset output was: $out"
+out=$(HOME="$home" "$root/setupConfigDir" shared 2>/dev/null)
+[[ "$out" == $'unset CLAUDE_CONFIG_DIR\nunset CODEX_HOME' ]] || \
+    fail "setupConfigDir shared reset output was: $out"
+out=$(HOME="$home" "$root/setupConfigDir" newname 2>/dev/null)
+[[ "$out" == *"export CLAUDE_CONFIG_DIR=$home/.claude-newname"* ]] || \
+    fail 'setupConfigDir did not print CLAUDE_CONFIG_DIR export'
+[[ "$out" == *"export CODEX_HOME=$home/.codex-newname"* ]] || \
+    fail 'setupConfigDir did not print CODEX_HOME export'
+
+printf 'ok - profile management behavior\n'

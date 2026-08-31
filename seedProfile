@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 h-network
+#
+# seedProfile — noninteractive named-profile creation, for subprocesses and
+# automation. See setupConfigDir for the interactive, shell-integrated form.
+set -uo pipefail
+
+usage() {
+    cat <<'EOF'
+usage: seedProfile [--export] <claude|codex> <name>
+
+  Creates the profile dir for one CLI and seeds it with the defaults from the
+  live default profile — settings, and the answers to the first-run dialogs.
+
+  claude <name>   -> ~/.claude-<name>   prints CLAUDE_CONFIG_DIR=<dir>
+  codex  <name>   -> ~/.codex-<name>    prints CODEX_HOME=<dir>
+
+  --export        print as `export VAR=dir`, for eval
+
+Existing files are never overwritten, so re-running is safe. Credentials are
+not copied: a seeded profile is unauthenticated by design.
+
+agy is not supported -- it has no config-dir override; see the error it prints.
+
+Exit: 0 seeded, 2 bad arguments, 3 unsupported CLI.
+EOF
+}
+
+lib_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=h-agent-profile-lib.sh
+. "$lib_dir/h-agent-profile-lib.sh"
+
+export_form=0
+if [ "${1:-}" = "--export" ]; then export_form=1; shift; fi
+
+case "${1:-}" in
+    -h|--help|help) usage; exit 0 ;;
+esac
+
+cli="${1:-}"
+raw_name="${2:-}"
+
+if [ -z "$cli" ] || [ -z "$raw_name" ]; then
+    usage >&2
+    exit 2
+fi
+
+name=$(hap_validate_profile_name "$raw_name") || exit 2
+
+case "$cli" in
+    claude)
+        dir="$HOME/.claude-$name"
+        mkdir -p "$dir" || exit 1
+        hap_copy_profile_assets "$HOME/.claude" "$dir" settings.json skills agents CLAUDE.md
+        hap_seed_claude_onboarding_scoped "$dir" "$HOME/.claude.json" /workspace || exit 1
+        var=CLAUDE_CONFIG_DIR
+        ;;
+    codex)
+        dir="$HOME/.codex-$name"
+        mkdir -p "$dir" || exit 1
+        hap_copy_profile_assets "$HOME/.codex" "$dir" config.toml AGENTS.md
+        var=CODEX_HOME
+        ;;
+    agy)
+        hap_agy_refusal
+        exit 3
+        ;;
+    *)
+        echo "error: unknown CLI '$cli' (expected claude or codex)" >&2
+        exit 2
+        ;;
+esac
+
+if [ "$export_form" -eq 1 ]; then
+    echo "export $var=$dir"
+else
+    echo "$var=$dir"
+fi
