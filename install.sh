@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -euo pipefail
 
 repo=${H_AGENT_REPOSITORY:-h-network/h-agent}

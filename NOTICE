@@ -1,0 +1,23 @@
+This project is licensed by H-Network under the terms in `LICENSE`.
+
+It depends on the following third-party components, which are licensed
+separately under their own terms and are NOT covered by this project's
+license:
+
+- Claude Code (https://github.com/anthropics/claude-code) — Proprietary,
+  vendor-provided software subject to Anthropic's Commercial Terms of Service
+  (https://www.anthropic.com/legal/commercial-terms)
+  Copyright (c) Anthropic PBC
+
+- OpenAI Codex CLI (https://github.com/openai/codex) — Apache License 2.0
+  Copyright (c) 2025 OpenAI
+
+- Google Antigravity CLI (`agy`) (https://antigravity.google/) — Proprietary,
+  vendor-provided software subject to the Google Antigravity Terms of Service
+  (https://antigravity.google/terms)
+  Copyright (c) Google LLC
+
+This project does not modify or redistribute the source of the above
+component(s) — it is used as an unmodified dependency. No rights are
+claimed over it, and its own license terms continue to apply to it in
+full.

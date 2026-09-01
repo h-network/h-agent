@@ -5,7 +5,7 @@
 <br/>
 
 [![CI](https://github.com/h-network/h-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/h-network/h-agent/actions/workflows/ci.yml)
-[![License: Apache 2.0](assets/badges/license.svg)](LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](assets/badges/license.svg)](LICENSE)
 ![Agents: claude codex agy](assets/badges/agents.svg)
 ![Runtime: Bash 4+](assets/badges/bash.svg)
 
@@ -182,4 +182,6 @@ shellcheck h-agent install.sh seedProfile setupConfigDir \
 
 ## License
 
-Apache-2.0
+[PolyForm Noncommercial 1.0.0](LICENSE). Third-party agent CLIs remain under
+their vendors' separate terms; see [NOTICE](NOTICE). Project and h-network
+names are covered by the [trademark policy](TRADEMARKS.md).

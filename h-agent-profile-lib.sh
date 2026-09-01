@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Copyright 2026 h-network
 #
 # Shared validation/copy/state logic for h-agent's named-profile commands
