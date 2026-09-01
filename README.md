@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="H-AGENT // unattended launcher for claude, codex, agy" width="760">
+<img src="assets/banner.png" alt="H-AGENT // unattended launcher for claude, codex, agy" width="760">
 
 <br/>
 
