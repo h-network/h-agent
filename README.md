@@ -1,3 +1,5 @@
+<img src="assets/banner.svg" alt="H-AGENT // unattended launcher for claude, codex, agy" width="760">
+
 # h-agent
 
 `h-agent` launches Claude Code, Agy, or Codex with consistent unattended-mode
