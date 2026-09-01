@@ -20,7 +20,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 if [[ "$url" == */manifests/*.json ]]; then
-    printf '{"version":"%s"}\n' "${TEST_AGY_VERSION:-1.1.22}"
+    printf '{"version":"%s"}\n' "${TEST_AGY_VERSION:-1.1.23}"
     exit
 fi
 case "$url" in
@@ -37,7 +37,7 @@ case "$url" in
     https://chatgpt.com/codex/install.sh)
         body='printf "codex %s noninteractive=%s\\n" "$*" "$CODEX_NON_INTERACTIVE" >>"$TEST_LOG"; mkdir -p "$CODEX_INSTALL_DIR"; printf "#!/usr/bin/env bash\\necho codex-cli 0.149.0\\n" >"$CODEX_INSTALL_DIR/codex"; chmod +x "$CODEX_INSTALL_DIR/codex"' ;;
     https://antigravity.google/cli/install.sh)
-        body='printf "agy %s\\n" "$*" >>"$TEST_LOG"; test "$1" = --dir; mkdir -p "$2"; printf "#!/usr/bin/env bash\\necho 1.1.22\\n" >"$2/agy"; chmod +x "$2/agy"' ;;
+        body='printf "agy %s\\n" "$*" >>"$TEST_LOG"; test "$1" = --dir; mkdir -p "$2"; printf "#!/usr/bin/env bash\\necho 1.1.23\\n" >"$2/agy"; chmod +x "$2/agy"' ;;
     *) echo "unexpected URL: $url" >&2; exit 1 ;;
 esac
 printf '#!/usr/bin/env bash\n%s\n' "$body" >"$output"
@@ -124,7 +124,7 @@ test "$(wc -l <"$TEST_LOG")" -eq "$before"
 test ! -e "$tmp/stage-home/.claude.json"
 test ! -e "$tmp/stage-home/.codex/config.toml"
 
-if PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/wrong-agy" TEST_AGY_VERSION=1.1.23 \
+if PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/wrong-agy" TEST_AGY_VERSION=1.1.24 \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null 2>&1; then
     echo 'not ok - incompatible agy manifest was accepted' >&2
     exit 1

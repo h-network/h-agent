@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh |
 ```
 
 This installs `h-agent` plus its compatible CLI versions—Claude Code `2.1.251`,
-Codex CLI `0.149.0`, and agy `1.1.22`—using their official installers. Already
+Codex CLI `0.149.0`, and agy `1.1.23`—using their official installers. Already
 installed CLIs at those exact versions are left untouched. Installation does
 not require `sudo`.
 

@@ -8,7 +8,7 @@ url=${H_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/$repo/$version/h-ag
 destdir=${DESTDIR:-}
 claude_version=2.1.251
 codex_version=0.149.0
-agy_version=1.1.22
+agy_version=1.1.23
 
 if [ -z "${HOME:-}" ]; then
     if command -v getent >/dev/null 2>&1 && command -v id >/dev/null 2>&1; then
