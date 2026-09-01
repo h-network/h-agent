@@ -1,4 +1,15 @@
+<div align="center">
+
 <img src="assets/banner.svg" alt="H-AGENT // unattended launcher for claude, codex, agy" width="760">
+
+<br/>
+
+[![CI](https://github.com/h-network/h-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/h-network/h-agent/actions/workflows/ci.yml)
+[![License: Apache 2.0](assets/badges/license.svg)](LICENSE)
+![Agents: claude codex agy](assets/badges/agents.svg)
+![Runtime: Bash 4+](assets/badges/bash.svg)
+
+</div>
 
 # h-agent
 
