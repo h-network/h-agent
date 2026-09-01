@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="212" viewBox="0 0 800 212">
 <rect width="100%" height="100%" fill="#0d1117"/>
-<text x="10" y="30" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██╗  ██╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗</text>
-<text x="10" y="54" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██║  ██║      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝</text>
-<text x="10" y="78" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ███████║█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║</text>
-<text x="10" y="102" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██╔══██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║</text>
-<text x="10" y="126" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██║  ██║      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║</text>
-<text x="10" y="150" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ╚═╝  ╚═╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝</text>
-<text x="10" y="184" font-family="Menlo, Consolas, monospace" font-size="20" fill="#8b949e" xml:space="preserve">  H-AGENT // unattended launcher for claude, codex, agy</text>
+<text x="400" y="30" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██╗  ██╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗</text>
+<text x="400" y="54" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██║  ██║      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝</text>
+<text x="400" y="78" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ███████║█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║</text>
+<text x="400" y="102" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██╔══██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║</text>
+<text x="400" y="126" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ██║  ██║      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║</text>
+<text x="400" y="150" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="20" fill="#58a6ff" xml:space="preserve">  ╚═╝  ╚═╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝</text>
+<text x="400" y="184" text-anchor="middle" font-family="Menlo, Consolas, monospace" font-size="20" fill="#8b949e" xml:space="preserve">  H-AGENT // unattended launcher for claude, codex, agy</text>
 </svg>
