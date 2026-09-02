@@ -19,10 +19,6 @@ while [ "$#" -gt 0 ]; do
         *) url=$1; shift ;;
     esac
 done
-if [[ "$url" == */manifests/*.json ]]; then
-    printf '{"version":"%s"}\n' "${TEST_AGY_VERSION:-1.1.24}"
-    exit
-fi
 case "$url" in
     https://example.invalid/h-agent)
         body='echo installed-test-agent' ;;
@@ -37,7 +33,7 @@ case "$url" in
     https://chatgpt.com/codex/install.sh)
         body='printf "codex %s noninteractive=%s\\n" "$*" "$CODEX_NON_INTERACTIVE" >>"$TEST_LOG"; mkdir -p "$CODEX_INSTALL_DIR"; printf "#!/usr/bin/env bash\\necho codex-cli 0.149.0\\n" >"$CODEX_INSTALL_DIR/codex"; chmod +x "$CODEX_INSTALL_DIR/codex"' ;;
     https://antigravity.google/cli/install.sh)
-        body='printf "agy %s\\n" "$*" >>"$TEST_LOG"; test "$1" = --dir; mkdir -p "$2"; printf "#!/usr/bin/env bash\\necho 1.1.24\\n" >"$2/agy"; chmod +x "$2/agy"' ;;
+        body='printf "agy %s version=%s\\n" "$*" "${TEST_AGY_INSTALLER_VERSION:-9.8.7}" >>"$TEST_LOG"; test "$1" = --dir; mkdir -p "$2"; printf "#!/usr/bin/env bash\\necho %s\\n" "${TEST_AGY_INSTALLER_VERSION:-9.8.7}" >"$2/agy"; chmod +x "$2/agy"' ;;
     *) echo "unexpected URL: $url" >&2; exit 1 ;;
 esac
 printf '#!/usr/bin/env bash\n%s\n' "$body" >"$output"
@@ -59,7 +55,7 @@ test "$("$tmp/home/.local/bin/h-agent-profile-lib.sh")" = installed-test-profile
 grep -Fqx 'echo '\''export PATH="$HOME/.local/bin:$PATH"'\'' >> "$HOME/.zshrc" && source "$HOME/.zshrc"' <<<"$output"
 grep -Fqx 'claude 2.1.251' "$TEST_LOG"
 grep -Fqx 'codex --release 0.149.0 noninteractive=1' "$TEST_LOG"
-grep -Fqx "agy --dir $tmp/home/.local/bin" "$TEST_LOG"
+grep -Fqx "agy --dir $tmp/home/.local/bin version=9.8.7" "$TEST_LOG"
 jq -e --arg cwd "$root" '
     .hasCompletedOnboarding == true and
     .projects[$cwd].hasTrustDialogAccepted == true and
@@ -107,7 +103,9 @@ grep -Fqx 'sandbox_mode = "read-only"' "$tmp/existing-home/.codex/config.toml"
 before=$(wc -l <"$TEST_LOG")
 PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/home" \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
-test "$(wc -l <"$TEST_LOG")" -eq "$before"
+test "$(wc -l <"$TEST_LOG")" -eq "$((before + 1))"
+grep -Fqx "agy --dir $tmp/home/.local/bin version=9.8.7" "$TEST_LOG"
+before=$(wc -l <"$TEST_LOG")
 
 fish_output=$(PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/fish-home" SHELL=/usr/bin/fish \
     H_AGENT_INSTALL_CLIS=0 H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh")
@@ -123,16 +121,6 @@ test -x "$tmp/stage/opt/h-agent/bin/h-agent-profile-lib.sh"
 test "$(wc -l <"$TEST_LOG")" -eq "$before"
 test ! -e "$tmp/stage-home/.claude.json"
 test ! -e "$tmp/stage-home/.codex/config.toml"
-
-if PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/wrong-agy" TEST_AGY_VERSION=1.1.25 \
-    H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null 2>&1; then
-    echo 'not ok - incompatible agy manifest was accepted' >&2
-    exit 1
-fi
-if grep -Fq 'wrong-agy' "$TEST_LOG"; then
-    echo 'not ok - agy installer ran after a manifest mismatch' >&2
-    exit 1
-fi
 
 if PREFIX=relative PATH="$tmp/bin:/usr/bin:/bin" "$root/install.sh" >/dev/null 2>&1; then
     echo 'not ok - relative PREFIX was accepted' >&2
