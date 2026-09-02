@@ -38,7 +38,7 @@ EOF
 }
 
 lib_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-# shellcheck source=h-agent-profile-lib.sh
+# shellcheck source=h-app/h-agent-profile-lib.sh
 . "$lib_dir/h-agent-profile-lib.sh"
 
 name="" same=0

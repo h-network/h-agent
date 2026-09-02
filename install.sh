@@ -4,7 +4,7 @@ set -euo pipefail
 
 repo=${H_AGENT_REPOSITORY:-h-network/h-agent}
 version=${H_AGENT_VERSION:-main}
-url=${H_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/$repo/$version/h-agent}
+url=${H_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/$repo/$version/h-app/h-agent}
 destdir=${DESTDIR:-}
 claude_version=2.1.251
 codex_version=0.149.0

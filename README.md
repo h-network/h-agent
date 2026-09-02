@@ -175,9 +175,9 @@ splitting `HOME` entirely rather than pointing an env var elsewhere.
 
 ```sh
 make test
-shellcheck h-agent install.sh seedProfile setupConfigDir \
-    h-agent-profile-lib.sh test/h-agent-test test/install-test \
-    test/profile-test
+shellcheck h-app/h-agent install.sh h-app/seedProfile h-app/setupConfigDir \
+    h-app/h-agent-profile-lib.sh h-app/test/h-agent-test h-app/test/install-test \
+    h-app/test/profile-test
 ```
 
 ## License
