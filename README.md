@@ -33,6 +33,13 @@ latest agy available from its official installer. Claude Code and Codex CLI are
 left untouched when the exact versions are already installed. Installation does
 not require `sudo`.
 
+Each CLI is installed independently: if one fails to download or install (a
+dead installer URL, a bad release, etc.), the installer prints which one
+failed and why, then continues with the rest — the other CLIs, `h-agent`
+itself, `seedProfile`/`setupConfigDir`, and config seeding all still run. The
+script only exits nonzero, with a final ok/failed summary, after everything
+else has been attempted.
+
 The installer also seeds unattended defaults in the invoking identity's
 `$HOME`: Claude's completed-onboarding state and settings, plus Codex's update,
 approval, and sandbox defaults. Missing values are added, but existing user

@@ -31,6 +31,10 @@ case "$url" in
     https://claude.ai/install.sh)
         body='printf "claude %s\\n" "$*" >>"$TEST_LOG"; mkdir -p "$HOME/.local/bin"; printf "#!/usr/bin/env bash\\necho 2.1.251 \\(Claude Code\\)\\n" >"$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"' ;;
     https://chatgpt.com/codex/install.sh)
+        if [ "${TEST_CODEX_INSTALLER_FAIL:-0}" = 1 ]; then
+            echo 'curl: (22) The requested URL returned error: 404' >&2
+            exit 22
+        fi
         body='printf "codex %s noninteractive=%s\\n" "$*" "$CODEX_NON_INTERACTIVE" >>"$TEST_LOG"; mkdir -p "$CODEX_INSTALL_DIR"; printf "#!/usr/bin/env bash\\necho codex-cli 0.149.0\\n" >"$CODEX_INSTALL_DIR/codex"; chmod +x "$CODEX_INSTALL_DIR/codex"' ;;
     https://antigravity.google/cli/install.sh)
         body='printf "agy %s version=%s\\n" "$*" "${TEST_AGY_INSTALLER_VERSION:-9.8.7}" >>"$TEST_LOG"; test "$1" = --dir; mkdir -p "$2"; printf "#!/usr/bin/env bash\\necho %s\\n" "${TEST_AGY_INSTALLER_VERSION:-9.8.7}" >"$2/agy"; chmod +x "$2/agy"' ;;
@@ -126,5 +130,28 @@ if PREFIX=relative PATH="$tmp/bin:/usr/bin:/bin" "$root/install.sh" >/dev/null 2
     echo 'not ok - relative PREFIX was accepted' >&2
     exit 1
 fi
+
+# A single CLI installer failing (e.g. a 404) must not abort the rest of the
+# install: the other CLIs, h-agent's own files, and config seeding must all
+# still complete, with a clear message and a nonzero final exit code.
+codex_fail_home=$tmp/codex-fail-home
+if fail_output=$(TEST_CODEX_INSTALLER_FAIL=1 PATH="$tmp/bin:/usr/bin:/bin" HOME="$codex_fail_home" \
+    H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" 2>&1); then
+    echo 'not ok - install.sh exited 0 despite a failed CLI install' >&2
+    exit 1
+fi
+test -x "$codex_fail_home/.local/bin/h-agent"
+test -x "$codex_fail_home/.local/bin/seedProfile"
+test -x "$codex_fail_home/.local/bin/setupConfigDir"
+test -x "$codex_fail_home/.local/bin/h-agent-profile-lib.sh"
+test -x "$codex_fail_home/.local/bin/claude"
+test -x "$codex_fail_home/.local/bin/agy"
+test ! -e "$codex_fail_home/.local/bin/codex"
+test -s "$codex_fail_home/.claude.json"
+test -s "$codex_fail_home/.codex/config.toml"
+grep -Fq 'error: could not download the Codex CLI installer (https://chatgpt.com/codex/install.sh) — skipping codex, continuing' <<<"$fail_output"
+grep -Fq 'CLI install summary:' <<<"$fail_output"
+grep -Fqx '  ok:     claude agy' <<<"$fail_output"
+grep -Fqx '  failed: codex' <<<"$fail_output"
 
 echo 'ok - installer behavior'

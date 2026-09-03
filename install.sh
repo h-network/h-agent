@@ -58,42 +58,63 @@ installed_version_is() {
 }
 
 install_claude() {
-    local binary=$HOME/.local/bin/claude installer=$tmpdir/claude-install.sh
+    local binary=$HOME/.local/bin/claude installer=$tmpdir/claude-install.sh \
+        url=https://claude.ai/install.sh
     if installed_version_is "$binary" "$claude_version"; then
         echo "Claude Code $claude_version is already installed"
         return
     fi
-    download_file https://claude.ai/install.sh "$installer"
-    bash "$installer" "$claude_version"
-    installed_version_is "$binary" "$claude_version" || {
-        echo "error: Claude Code $claude_version installation could not be verified" >&2
-        exit 1
-    }
+    if ! download_file "$url" "$installer"; then
+        echo "error: could not download the Claude Code installer ($url) — skipping claude, continuing" >&2
+        return 1
+    fi
+    if ! bash "$installer" "$claude_version"; then
+        echo "error: Claude Code $claude_version installer failed — skipping claude, continuing" >&2
+        return 1
+    fi
+    if ! installed_version_is "$binary" "$claude_version"; then
+        echo "error: Claude Code $claude_version installation could not be verified — skipping claude, continuing" >&2
+        return 1
+    fi
 }
 
 install_codex() {
-    local binary=$HOME/.local/bin/codex installer=$tmpdir/codex-install.sh
+    local binary=$HOME/.local/bin/codex installer=$tmpdir/codex-install.sh \
+        url=https://chatgpt.com/codex/install.sh
     if installed_version_is "$binary" "$codex_version"; then
         echo "Codex CLI $codex_version is already installed"
         return
     fi
-    download_file https://chatgpt.com/codex/install.sh "$installer"
-    CODEX_NON_INTERACTIVE=1 CODEX_INSTALL_DIR="$HOME/.local/bin" \
-        sh "$installer" --release "$codex_version"
-    installed_version_is "$binary" "$codex_version" || {
-        echo "error: Codex CLI $codex_version installation could not be verified" >&2
-        exit 1
-    }
+    if ! download_file "$url" "$installer"; then
+        echo "error: could not download the Codex CLI installer ($url) — skipping codex, continuing" >&2
+        return 1
+    fi
+    if ! CODEX_NON_INTERACTIVE=1 CODEX_INSTALL_DIR="$HOME/.local/bin" \
+        sh "$installer" --release "$codex_version"; then
+        echo "error: Codex CLI $codex_version installer failed — skipping codex, continuing" >&2
+        return 1
+    fi
+    if ! installed_version_is "$binary" "$codex_version"; then
+        echo "error: Codex CLI $codex_version installation could not be verified — skipping codex, continuing" >&2
+        return 1
+    fi
 }
 
 install_agy() {
-    local binary=$HOME/.local/bin/agy installer=$tmpdir/agy-install.sh
-    download_file https://antigravity.google/cli/install.sh "$installer"
-    bash "$installer" --dir "$HOME/.local/bin"
-    [ -x "$binary" ] || {
-        echo "error: agy installation could not be verified" >&2
-        exit 1
-    }
+    local binary=$HOME/.local/bin/agy installer=$tmpdir/agy-install.sh \
+        url=https://antigravity.google/cli/install.sh
+    if ! download_file "$url" "$installer"; then
+        echo "error: could not download the agy installer ($url) — skipping agy, continuing" >&2
+        return 1
+    fi
+    if ! bash "$installer" --dir "$HOME/.local/bin"; then
+        echo "error: agy installer failed — skipping agy, continuing" >&2
+        return 1
+    fi
+    if [ ! -x "$binary" ]; then
+        echo "error: agy installation could not be verified — skipping agy, continuing" >&2
+        return 1
+    fi
 }
 
 print_path_instruction() {
@@ -280,11 +301,14 @@ download_verified "$seedprofile_url" "$tmpdir/seedProfile"
 download_verified "$setupconfigdir_url" "$tmpdir/setupConfigDir"
 download_verified "$profilelib_url" "$tmpdir/h-agent-profile-lib.sh"
 
+cli_ok=()
+cli_failed=()
+
 # DESTDIR means package staging: never mutate the invoking user's CLI installs.
 if [ -z "$destdir" ] && [ "${H_AGENT_INSTALL_CLIS:-1}" = 1 ]; then
-    install_claude
-    install_codex
-    install_agy
+    if install_claude; then cli_ok+=(claude); else cli_failed+=(claude); fi
+    if install_codex; then cli_ok+=(codex); else cli_failed+=(codex); fi
+    if install_agy; then cli_ok+=(agy); else cli_failed+=(agy); fi
 fi
 if [ -z "$destdir" ] && [ "${H_AGENT_SEED_CONFIG:-1}" = 1 ]; then
     seed_cli_config
@@ -305,4 +329,14 @@ if [ -z "$destdir" ]; then
             print_path_instruction
             ;;
     esac
+fi
+
+if [ "${#cli_failed[@]}" -gt 0 ]; then
+    echo >&2
+    echo "CLI install summary:" >&2
+    if [ "${#cli_ok[@]}" -gt 0 ]; then
+        echo "  ok:     ${cli_ok[*]}" >&2
+    fi
+    echo "  failed: ${cli_failed[*]}" >&2
+    exit 1
 fi
