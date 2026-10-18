@@ -76,4 +76,25 @@ printf '%s' "$payload" | H_AGENT_PERL=perl-not-installed AGENT_NAME=coder \
 jq -e '.name == "coder"' "$nalog" >/dev/null \
     || fail 'AGENT_NAME not recorded in no-perl fallback'
 
+# 9. agy: a JSON control response is printed on stdout FIRST (always), then the
+#    event is logged using agy's own schema (toolCall.args.CommandLine,
+#    conversationId). PreToolUse must allow; other events emit {}.
+agy_payload='{"conversationId":"c-7","workspacePaths":["/w"],"toolCall":{"name":"run_command","args":{"CommandLine":"ls -la"}},"stepIdx":3}'
+aglog="$tmp/agy.jsonl"
+out=$(printf '%s' "$agy_payload" | AGENT_CAPTURE_FILE="$aglog" "$cap" agy PreToolUse)
+test "$out" = '{"decision":"allow"}' || fail "agy PreToolUse must emit allow decision (got: $out)"
+jq -e '.agent == "agy" and .event == "PreToolUse" and .tool_name == "run_command" and
+       .command == "ls -la" and .session_id == "c-7" and .cwd == "/w"' "$aglog" >/dev/null \
+    || fail 'agy log fields not mapped from agy schema'
+out=$(printf '%s' '{"conversationId":"c-7"}' | AGENT_CAPTURE_FILE="$aglog" "$cap" agy Stop)
+test "$out" = '{}' || fail "agy non-PreToolUse must emit empty object (got: $out)"
+# the control response must survive a missing perl ...
+out=$(printf '%s' "$agy_payload" | H_AGENT_PERL=perl-not-installed AGENT_CAPTURE_FILE="$aglog" "$cap" agy PreToolUse)
+test "$out" = '{"decision":"allow"}' || fail 'agy control response must survive missing perl'
+# ... and a disabled capture (which must still NOT write a log)
+agy_off="$tmp/agy-off.jsonl"
+out=$(printf '%s' "$agy_payload" | AGENT_CAPTURE=0 AGENT_CAPTURE_FILE="$agy_off" "$cap" agy PreToolUse)
+test "$out" = '{"decision":"allow"}' || fail 'agy control response must survive AGENT_CAPTURE=0'
+test ! -e "$agy_off" || fail 'AGENT_CAPTURE=0 must not write a log'
+
 printf 'ok - capture behavior\n'

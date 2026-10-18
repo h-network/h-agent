@@ -194,4 +194,7 @@ if AGENT_CAPTURE_FILE="$tmp/absent.jsonl" "$root/h-agent" --log >/dev/null 2>&1;
     fail '--log succeeded with no log file'
 fi
 
+# --help shows the banner.
+assert_has_sub "$("$root/h-agent" --help 2>&1)" 'h-network/h-agent'
+
 printf 'ok - h-agent behavior\n'

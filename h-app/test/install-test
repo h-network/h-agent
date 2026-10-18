@@ -93,6 +93,11 @@ head -n 1 "$tmp/home/.claude/statusline.pl" | grep -Fqx '#!/usr/bin/perl'
 grep -Fqx 'check_for_update_on_startup = false' "$tmp/home/.codex/config.toml"
 grep -Fqx 'approval_policy = "never"' "$tmp/home/.codex/config.toml"
 grep -Fqx 'sandbox_mode = "danger-full-access"' "$tmp/home/.codex/config.toml"
+jq -e '.["h-agent-capture"].PreToolUse[0].matcher == "run_command" and
+       (.["h-agent-capture"].PreToolUse[0].hooks[0].command | contains("agy PreToolUse")) and
+       (.["h-agent-capture"].SessionStart[0].command | contains("agy SessionStart")) and
+       (.["h-agent-capture"].Stop[0].command | contains("agy Stop"))' \
+    "$tmp/home/.gemini/config/hooks.json" >/dev/null
 
 mkdir -p "$tmp/existing-home/.claude" "$tmp/existing-home/.codex"
 cat >"$tmp/existing-home/.claude.json" <<'EOF'
@@ -150,6 +155,7 @@ test -x "$tmp/stage/opt/h-agent/bin/h-agent-capture"
 test "$(wc -l <"$TEST_LOG")" -eq "$before"
 test ! -e "$tmp/stage-home/.claude.json"
 test ! -e "$tmp/stage-home/.codex/config.toml"
+test ! -e "$tmp/stage-home/.gemini/config/hooks.json"
 
 if PREFIX=relative PATH="$tmp/bin:/usr/bin:/bin" "$root/install.sh" >/dev/null 2>&1; then
     echo 'not ok - relative PREFIX was accepted' >&2

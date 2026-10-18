@@ -5,13 +5,19 @@
 # h-agent-capture — append one JSON Lines record per agent hook event.
 #
 # Reads the hook payload as JSON on stdin and records commands + metadata only
-# (event name, tool name, the Bash command, ids and cwd) -- never prompts and
-# never tool output. It must never disrupt the agent that invoked it: it always
-# exits 0, tolerates malformed input and an unwritable log, and needs no jq. A
-# perl with the core JSON::PP module parses the payload; without perl it records
-# a minimal, payload-free line so the event is still counted.
+# (event name, tool name, the command, ids and cwd) -- never prompts and never
+# tool output. It must never disrupt the agent that invoked it: it always exits
+# 0, tolerates malformed input and an unwritable log, and needs no jq. A perl
+# with the core JSON::PP module parses the payload; without perl it records a
+# minimal, payload-free line so the event is still counted.
 #
-# Usage (from a hook):  h-agent-capture <agent-name>
+# Usage (from a hook):  h-agent-capture <agent-name> [<event-name>]
+#
+# claude/codex read no stdout from the hook. agy hooks are synchronous and
+# REQUIRE a JSON control response on stdout, or they block/deny the tool, so for
+# agent "agy" we print that control response FIRST, unconditionally, before any
+# logging. The event name must be passed as the second argument for agy because
+# its payload carries no event field.
 
 # Nothing below may fail the agent, whatever goes wrong.
 trap 'exit 0' EXIT
@@ -21,6 +27,22 @@ agent=${1:-unknown}
 # Sanitize: keep a conservative charset, fold anything else to '_'.
 agent=$(printf '%s' "$agent" | tr -c 'A-Za-z0-9._-' '_' 2>/dev/null)
 [ -n "$agent" ] || agent=unknown
+event=${2:-}
+
+# agy: emit the required control response on stdout first, so a logging failure
+# (missing perl, unwritable log, disabled capture) can never block agy's loop.
+# PreToolUse must explicitly allow the tool; every other event takes an empty
+# object (which, for Stop, means "do not keep running").
+if [ "$agent" = agy ]; then
+    case "$event" in
+        PreToolUse) printf '{"decision":"allow"}\n' ;;
+        *) printf '{}\n' ;;
+    esac
+fi
+
+# Logging is opt-out via AGENT_CAPTURE=0 (the control response above is already
+# out, so agy stays safe either way).
+[ "${AGENT_CAPTURE:-1}" = 0 ] && exit 0
 
 # Optional caller-supplied label (e.g. a framework's per-agent instance name),
 # recorded verbatim as the "name" field when set.
@@ -45,7 +67,7 @@ if command -v "$perl_bin" >/dev/null 2>&1; then
     perl_src=$(cat <<'PERL'
 use strict; use warnings;
 use JSON::PP;
-my ($agent, $ts, $name) = @ARGV;
+my ($agent, $ts, $name, $event_arg) = @ARGV;
 local $/;
 my $raw = <STDIN>;
 $raw = '' unless defined $raw;
@@ -53,28 +75,57 @@ my $d = eval { decode_json($raw) };
 $d = {} unless ref $d eq 'HASH';
 my %out = (ts => $ts, agent => $agent);
 $out{name} = $name if defined $name && length $name;
-$out{event} = $d->{hook_event_name}
-    if defined $d->{hook_event_name} && !ref $d->{hook_event_name};
-for my $k (qw(session_id tool_name tool_use_id cwd)) {
-    $out{$k} = $d->{$k} if defined $d->{$k} && !ref $d->{$k};
-}
-# Only the Bash command is recorded; other tool inputs (file contents, prompts,
-# tool output) are intentionally dropped.
+
+# Event: claude/codex carry it in the payload; agy passes it as an argument.
+my $event = (defined $d->{hook_event_name} && !ref $d->{hook_event_name})
+    ? $d->{hook_event_name}
+    : (defined $event_arg && length $event_arg ? $event_arg : undef);
+$out{event} = $event if defined $event;
+
+# Session id: claude/codex "session_id", agy "conversationId".
+my $sid = defined $d->{session_id} ? $d->{session_id} : $d->{conversationId};
+$out{session_id} = $sid if defined $sid && !ref $sid;
+
+# Tool name: claude/codex "tool_name", agy "toolCall.name".
+my $tc = $d->{toolCall};
+my $tool = $d->{tool_name};
+$tool = $tc->{name} if !defined $tool && ref $tc eq 'HASH';
+$out{tool_name} = $tool if defined $tool && !ref $tool;
+
+$out{tool_use_id} = $d->{tool_use_id}
+    if defined $d->{tool_use_id} && !ref $d->{tool_use_id};
+
+# cwd: claude/codex "cwd", agy first of "workspacePaths".
+my $cwd = $d->{cwd};
+$cwd = $d->{workspacePaths}[0]
+    if !defined $cwd && ref $d->{workspacePaths} eq 'ARRAY' && @{$d->{workspacePaths}};
+$out{cwd} = $cwd if defined $cwd && !ref $cwd;
+
+# Command only (no other tool inputs/output): claude/codex "tool_input.command",
+# agy run_command "toolCall.args.CommandLine".
+my $cmd;
 my $ti = $d->{tool_input};
-$out{command} = $ti->{command}
-    if ref $ti eq 'HASH' && defined $ti->{command} && !ref $ti->{command};
+$cmd = $ti->{command} if ref $ti eq 'HASH' && defined $ti->{command} && !ref $ti->{command};
+if (!defined $cmd && ref $tc eq 'HASH' && ref $tc->{args} eq 'HASH') {
+    my $cl = $tc->{args}{CommandLine};
+    $cmd = $cl if defined $cl && !ref $cl;
+}
+$out{command} = $cmd if defined $cmd;
 print encode_json(\%out), "\n";
 PERL
 )
-    printf '%s' "$raw" | "$perl_bin" -e "$perl_src" -- "$agent" "$ts" "$name" >>"$log" 2>/dev/null
+    printf '%s' "$raw" | "$perl_bin" -e "$perl_src" -- "$agent" "$ts" "$name" "$event" >>"$log" 2>/dev/null
 else
-    nkey=""
+    extra=""
+    if [ -n "$event" ]; then
+        eesc=${event//\\/\\\\}; eesc=${eesc//\"/\\\"}
+        extra="\"event\":\"$eesc\","
+    fi
     if [ -n "$name" ]; then
-        nesc=${name//\\/\\\\}
-        nesc=${nesc//\"/\\\"}
-        nkey="\"name\":\"$nesc\","
+        nesc=${name//\\/\\\\}; nesc=${nesc//\"/\\\"}
+        extra="$extra\"name\":\"$nesc\","
     fi
     printf '{"ts":"%s","agent":"%s",%s"note":"perl unavailable, payload not parsed"}\n' \
-        "$ts" "$agent" "$nkey" >>"$log" 2>/dev/null
+        "$ts" "$agent" "$extra" >>"$log" 2>/dev/null
 fi
 exit 0

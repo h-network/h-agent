@@ -422,12 +422,45 @@ EOF
     fi
 }
 
+seed_agy_hooks() {
+    # agy's global lifecycle hooks: capture shell commands (run_command) and
+    # session boundaries into the same log. agy requires a JSON control response
+    # on stdout, which h-agent-capture emits first. Written only when absent;
+    # merged (our named key) when the file already exists, preserving others.
+    local dir=$HOME/.gemini/config target tmp cap defaults
+    target=$dir/hooks.json
+    cap="$bindir/h-agent-capture"
+    mkdir -p "$dir" 2>/dev/null || return
+    defaults=$(printf '{\n  "h-agent-capture": {\n    "SessionStart": [\n      {"type": "command", "command": "\\"%s\\" agy SessionStart"}\n    ],\n    "PreToolUse": [\n      {"matcher": "run_command", "hooks": [\n        {"type": "command", "command": "\\"%s\\" agy PreToolUse"}\n      ]}\n    ],\n    "Stop": [\n      {"type": "command", "command": "\\"%s\\" agy Stop"}\n    ]\n  }\n}\n' "$cap" "$cap" "$cap")
+    if [ ! -s "$target" ]; then
+        printf '%s' "$defaults" >"$target"
+        return
+    fi
+    # Existing file: merge our key underneath it (existing wins), keep the rest.
+    if command -v "$jq_bin" >/dev/null 2>&1; then
+        tmp=$(mktemp "$dir/hooks.json.tmp.XXXXXXXX")
+        # $def is a jq argument, not a shell expansion.
+        # shellcheck disable=SC2016
+        if "$jq_bin" --argjson def "$defaults" '$def * .' "$target" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+            mv "$tmp" "$target"
+        else
+            rm -f "$tmp"
+            echo "warning: could not merge agy capture hooks into $target" >&2
+        fi
+    elif command -v "$perl_bin" >/dev/null 2>&1 && perl_merge_into "$defaults" "$target"; then
+        :
+    else
+        echo "warning: $target exists; install jq or perl to merge agy capture hooks" >&2
+    fi
+}
+
 seed_cli_config() {
     umask 077
     mkdir -p "$HOME"
     seed_claude_state
     seed_claude_settings
     seed_claude_statusline
+    seed_agy_hooks
     seed_codex_config
 }
 base_download_url=${url%/h-agent}

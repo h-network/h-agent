@@ -7,6 +7,15 @@ set -uo pipefail
 
 usage() {
     cat <<'EOF'
+  ██╗  ██╗      █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+  ██║  ██║     ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+  ███████║     ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
+  ██╔══██║     ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
+  ██║  ██║     ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
+  ╚═╝  ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
+
+  h-network/h-agent // unattended launcher for claude · codex · agy
+
 usage: h-agent [claude|agy|codex] [args...]
        h-agent fork [claude|codex] [session-id]
        h-agent probeProvider <url> [model-id]

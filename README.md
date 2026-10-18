@@ -137,20 +137,31 @@ any account and home directory:
 
 ### Command capture
 
-For both Claude and Codex, `h-agent` records what the agent does to a local
+For Claude, Codex, and agy, `h-agent` records what the agent does to a local
 JSON Lines log, one record per hook event. It logs session boundaries and shell
-commands only: `SessionStart`, `SessionEnd`, and `PreToolUse` scoped to `Bash`.
-It is **on by default**; set `AGENT_CAPTURE=0` to turn it off.
+commands only — `SessionStart`, session end (`SessionEnd`, or `Stop` on agy),
+and the before-tool event scoped to the shell command (`Bash` on claude/codex,
+`run_command` on agy). It is **on by default**; set `AGENT_CAPTURE=0` to turn it
+off.
 
-The hooks are injected per launch and write no files under `~/.claude` or
-`~/.codex`: for Claude, inline via `--settings` (merged with your own settings);
-for Codex, via `-c` TOML overrides plus `--dangerously-bypass-hook-trust` (Codex
-requires hooks to be trusted, and that cannot be set through `-c` — consistent
-with h-agent already running Codex in bypass mode). Both CLIs deliver the same
-stdin-JSON payload, so one capture script serves both. Each record holds
-**commands and metadata only** — the event name, tool name, the Bash command,
-the tool-use and session ids, and the cwd. Prompts and tool output are never
-logged. The log is created mode `600` at `AGENT_CAPTURE_FILE`.
+How the hooks are wired differs per CLI, and none of it clobbers your own
+config:
+- **Claude** — inline per launch via `--settings` (merged with your settings).
+- **Codex** — inline per launch via a `-c` TOML override plus
+  `--dangerously-bypass-hook-trust` (Codex requires hooks to be trusted, and
+  that can't be set through `-c` — consistent with h-agent already running Codex
+  in bypass mode).
+- **agy** — a global `~/.gemini/config/hooks.json` seeded at install (merged
+  into any existing file). Because it's global, it captures **every** agy run on
+  the machine, not only those launched through h-agent.
+
+One capture script serves all three; it normalizes each CLI's payload (agy uses
+a different, camelCase schema) into the same record: **commands and metadata
+only** — event, tool name, the command, the tool-use/session ids, and the cwd.
+Prompts and tool output are never logged. The log is created mode `600` at
+`AGENT_CAPTURE_FILE`. agy hooks are synchronous and require a control response,
+which the capture always emits first, so capture can never block or deny an agy
+tool call.
 
 Capture never interferes with the agent: the hook always exits successfully,
 tolerates malformed input and an unwritable log, and needs no `jq`. It parses
@@ -175,8 +186,7 @@ prefix like the short `#id`), e.g. `h-agent --log claude`,
 the raw JSON Lines.
 
 Codex hook dispatch has been reported to be unreliable in some front-ends, so
-confirm commands actually appear in the log for your Codex version. agy is out
-of scope (no documented hook support).
+confirm commands actually appear in the log for your Codex version.
 
 ### Probe a local provider
 
