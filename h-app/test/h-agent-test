@@ -52,6 +52,49 @@ if "$root/h-agent" unknown >/dev/null 2>&1; then
     fail 'unknown CLI was accepted'
 fi
 
+# fork: claude, no id -> --continue --fork-session; with id -> --resume <id>.
+output=$(HOME="$tmp/forkhome" "$root/h-agent" fork 2>/dev/null)
+assert_has "$output" 'ARG=--continue'
+assert_has "$output" 'ARG=--fork-session'
+output=$(HOME="$tmp/forkhome" "$root/h-agent" fork claude 2>/dev/null)
+assert_has "$output" 'ARG=--continue'
+output=$(HOME="$tmp/forkhome" "$root/h-agent" fork 1234-abcd 2>/dev/null)
+assert_has "$output" 'ARG=--resume'
+assert_has "$output" 'ARG=1234-abcd'
+assert_has "$output" 'ARG=--fork-session'
+if grep -Fqx 'ARG=--continue' <<<"$output"; then
+    fail 'fork <id> should resume, not continue'
+fi
+# codex fork maps to the `fork` subcommand: --last by default, else the id.
+output=$(HOME="$tmp/forkhome" "$root/h-agent" fork codex 2>/dev/null)
+assert_has "$output" 'ARG=fork'
+assert_has "$output" 'ARG=--last'
+output=$(HOME="$tmp/forkhome" "$root/h-agent" fork codex sess-9 2>/dev/null)
+assert_has "$output" 'ARG=fork'
+assert_has "$output" 'ARG=sess-9'
+if grep -Fqx 'ARG=--last' <<<"$output"; then
+    fail 'codex fork <id> should not also pass --last'
+fi
+# agy fork unsupported -> error, not launch
+if "$root/h-agent" fork agy >/dev/null 2>&1; then
+    fail 'agy fork should be rejected'
+fi
+
+# Reasoning effort: claude gets --effort high by default; AGENT_EFFORT overrides;
+# an empty value omits the flag entirely.
+output=$(HOME="$tmp/effhome" "$root/h-agent" claude 2>/dev/null)
+assert_has "$output" 'ARG=--effort'
+assert_has "$output" 'ARG=high'
+output=$(AGENT_EFFORT=medium HOME="$tmp/effhome" "$root/h-agent" claude 2>/dev/null)
+assert_has "$output" 'ARG=medium'
+if grep -Fqx 'ARG=high' <<<"$output"; then
+    fail 'AGENT_EFFORT override did not replace the default'
+fi
+output=$(AGENT_EFFORT='' HOME="$tmp/effhome" "$root/h-agent" claude 2>/dev/null)
+if grep -Fqx 'ARG=--effort' <<<"$output"; then
+    fail 'empty AGENT_EFFORT still passed --effort'
+fi
+
 # Capture is on by default for claude: --settings registers exactly the three
 # events we keep (session boundaries + Bash commands), wired to h-agent-capture,
 # with PreToolUse scoped to Bash. No other events are registered.
@@ -72,23 +115,26 @@ output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
 if grep -Fq '"hooks"' <<<"$output"; then
     fail 'capture settings present when AGENT_CAPTURE=0'
 fi
-# codex gets the same three events via -c TOML overrides plus the trust-bypass
-# flag (trust cannot be set through -c).
+# codex gets the same three events, but as ONE -c hooks table, plus the
+# trust-bypass flag (trust cannot be set through -c).
 output=$(HOME="$tmp/caphome" "$root/h-agent" codex 2>/dev/null)
 assert_has_sub "$output" '--dangerously-bypass-hook-trust'
-assert_has_sub "$output" 'hooks.SessionStart='
-assert_has_sub "$output" 'hooks.SessionEnd='
-assert_has_sub "$output" 'hooks.PreToolUse='
+assert_has_sub "$output" 'hooks={'
+assert_has_sub "$output" 'SessionStart='
+assert_has_sub "$output" 'SessionEnd='
+assert_has_sub "$output" 'PreToolUse='
 assert_has_sub "$output" 'matcher="^Bash'
 assert_has_sub "$output" 'h-agent-capture codex'
 for event in UserPromptSubmit PostToolUse Stop; do
-    if grep -Fq "hooks.$event" <<<"$output"; then
+    if grep -Fq "$event" <<<"$output"; then
         fail "codex capture should not register $event"
     fi
 done
+# exactly one -c (combined), not three
+test "$(grep -Fxc 'ARG=-c' <<<"$output")" -eq 1 || fail 'codex capture should use a single -c'
 # disabling capture removes the overrides and the flag
 output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" codex 2>/dev/null)
-if grep -Fq 'hooks.PreToolUse' <<<"$output"; then
+if grep -Fq 'hooks=' <<<"$output"; then
     fail 'codex capture present when AGENT_CAPTURE=0'
 fi
 if grep -Fq -- '--dangerously-bypass-hook-trust' <<<"$output"; then

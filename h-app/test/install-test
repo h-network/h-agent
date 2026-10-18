@@ -78,6 +78,9 @@ jq -e --arg cwd "$root" '
 jq -e '
     .skipDangerousModePermissionPrompt == true and
     .copyOnSelect == false and
+    .spinnerTipsEnabled == false and
+    .timeFormat == "24-hour" and
+    .outputStyle == "Concise" and
     .statusLine.type == "command" and
     .statusLine.command == "~/.claude/statusline.pl" and
     .modelSettings["claude-sonnet-5-5"].autoCompactWindow == 500000 and

@@ -8,6 +8,7 @@ set -uo pipefail
 usage() {
     cat <<'EOF'
 usage: h-agent [claude|agy|codex] [args...]
+       h-agent fork [claude|codex] [session-id]
        h-agent probeProvider <url> [model-id]
        h-agent --log [agent-name]
 
@@ -15,6 +16,8 @@ usage: h-agent [claude|agy|codex] [args...]
            Bash/Read/Write/Edit/Glob/Grep
   agy      --dangerously-skip-permissions
   codex    --dangerously-bypass-approvals-and-sandbox
+  fork     fork a session into a new one, leaving the original untouched;
+           with a session id forks that one, otherwise the most recent
   probeProvider
            verify that an endpoint serves Claude's Anthropic protocol
   --log    print the capture log (AGENT_CAPTURE_FILE); optionally filtered
@@ -28,6 +31,8 @@ Environment:
   AGENT_SKIP_PERMISSIONS  1 (default) skips approval prompts; 0 keeps them
   AGENT_CLAUDE_TOOLS      claude's tool list (default:
                           "Bash Read Write Edit Glob Grep"; empty = unrestricted)
+  AGENT_EFFORT            claude reasoning effort (default: high; empty = model
+                          default). One of low, medium, high, xhigh, max
   AGENT_CAPTURE           1 (default) logs agent hook events; 0 disables
                           (claude and codex)
   AGENT_CAPTURE_FILE      capture log path
@@ -252,17 +257,53 @@ if [ "${1:-}" = --log ] || [ "${1:-}" = log ]; then
 fi
 
 cli="${AGENT_CLI:-claude}"
-case "${1:-}" in
-    claude|agy|codex) cli="$1"; shift ;;
-    -h|--help|help) usage; exit 0 ;;
-    "") ;;
-    -*) ;;
-    *)
-        echo "error: unknown agent CLI '$1' (expected claude, agy or codex)" >&2
-        echo "       run 'h-agent --help' for usage" >&2
-        exit 2
-        ;;
-esac
+if [ "${1:-}" = fork ]; then
+    # Universal "fork a session" command. Normalizes each CLI's own mechanism,
+    # then falls through to a normal launch (capture/skip/effort still apply).
+    shift
+    case "${1:-}" in
+        claude|codex|agy) cli="$1"; shift ;;
+    esac
+    case "$cli" in
+        claude)
+            # A bare positional is a session id; anything starting with '-'
+            # (or nothing) means fork the most recent session.
+            if [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; then
+                fork_sid="$1"; shift
+                set -- --resume "$fork_sid" --fork-session "$@"
+            else
+                set -- --continue --fork-session "$@"
+            fi
+            ;;
+        codex)
+            # codex fork is a subcommand, not a flag. Global flags (capture,
+            # bypass) are prepended by the normal launch path below. Unverified
+            # against a live codex -- confirm the hook fires on a forked session.
+            if [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; then
+                fork_sid="$1"; shift
+                set -- fork "$fork_sid" "$@"
+            else
+                set -- fork --last "$@"
+            fi
+            ;;
+        *)
+            echo "error: '$cli' does not support fork" >&2
+            exit 2
+            ;;
+    esac
+else
+    case "${1:-}" in
+        claude|agy|codex) cli="$1"; shift ;;
+        -h|--help|help) usage; exit 0 ;;
+        "") ;;
+        -*) ;;
+        *)
+            echo "error: unknown agent CLI '$1' (expected claude, agy or codex)" >&2
+            echo "       run 'h-agent --help' for usage" >&2
+            exit 2
+            ;;
+    esac
+fi
 
 if ! command -v "$cli" >/dev/null 2>&1; then
     echo "error: '$cli' is not installed or is not on PATH" >&2
@@ -334,11 +375,11 @@ if [ "${AGENT_CAPTURE:-1}" != 0 ] && { [ "$cli" = claude ] || [ "$cli" = codex ]
                 # h-agent already running codex in bypass mode by default. The
                 # payload is JSON on stdin with the same field names claude uses.
                 codex_cmd="$capture codex"
+                # All three events in one -c (a single hooks TOML table) to keep
+                # the injected command line short.
                 capture_codex_args=(
                     --dangerously-bypass-hook-trust
-                    -c "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"$codex_cmd\"}]}]"
-                    -c "hooks.SessionEnd=[{hooks=[{type=\"command\",command=\"$codex_cmd\"}]}]"
-                    -c "hooks.PreToolUse=[{matcher=\"^Bash\$\",hooks=[{type=\"command\",command=\"$codex_cmd\"}]}]"
+                    -c "hooks={SessionStart=[{hooks=[{type=\"command\",command=\"$codex_cmd\"}]}],SessionEnd=[{hooks=[{type=\"command\",command=\"$codex_cmd\"}]}],PreToolUse=[{matcher=\"^Bash\$\",hooks=[{type=\"command\",command=\"$codex_cmd\"}]}]}"
                 )
                 ;;
         esac
@@ -353,6 +394,11 @@ case "$cli" in
         # shellcheck disable=SC2206
         [ -n "$tools" ] && flags+=(--tools $tools)
         [ -n "$capture_settings" ] && flags+=(--settings "$capture_settings")
+        # Reasoning effort: default high, per-launch override via AGENT_EFFORT
+        # (a per-launch --effort beats any effortLevel in settings). Set
+        # AGENT_EFFORT='' to fall back to the model/settings default.
+        effort="${AGENT_EFFORT-high}"
+        [ -n "$effort" ] && flags+=(--effort "$effort")
         ;;
     agy)
         [ "$skip" = "1" ] && flags+=(--dangerously-skip-permissions)

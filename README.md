@@ -106,6 +106,9 @@ h-agent                 # AGENT_CLI, or claude by default
 h-agent claude --resume
 h-agent agy
 h-agent codex
+h-agent fork                    # fork your most recent claude session
+h-agent fork <session-id>       # fork a specific session (original untouched)
+h-agent fork codex [<id>]       # same for codex (fork subcommand; unverified)
 h-agent probeProvider http://localhost:8000
 h-agent probeProvider http://localhost:8000 my-model
 h-agent --log                   # print the capture log
@@ -123,6 +126,7 @@ any account and home directory:
 - `AGENT_CLI`: default CLI (`claude`)
 - `AGENT_SKIP_PERMISSIONS`: `1` to add unattended-mode flags (default), `0` not to
 - `AGENT_CLAUDE_TOOLS`: space-separated Claude tool list; empty means unrestricted
+- `AGENT_EFFORT`: Claude reasoning effort (default `high`; empty uses the model default) — one of `low`, `medium`, `high`, `xhigh`, `max`
 - `AGENT_PROVIDER_URL`: local endpoint URL (Claude only)
 - `AGENT_PROVIDER_MODEL`: model exposed by the endpoint
 - `AGENT_PROVIDER_SMALL_MODEL`: optional smaller model
