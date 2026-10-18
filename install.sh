@@ -6,8 +6,8 @@ repo=${H_AGENT_REPOSITORY:-h-network/h-agent}
 version=${H_AGENT_VERSION:-main}
 url=${H_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/$repo/$version/h-app/h-agent}
 destdir=${DESTDIR:-}
-claude_version=2.1.302
-codex_version=0.163.0
+claude_version=${CLAUDE_VERSION:-2.1.302}
+codex_version=${CODEX_VERSION:-0.163.0}
 
 if [ -z "${HOME:-}" ]; then
     if command -v getent >/dev/null 2>&1 && command -v id >/dev/null 2>&1; then
