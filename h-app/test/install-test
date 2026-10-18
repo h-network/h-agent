@@ -73,9 +73,14 @@ jq -e --arg cwd "$root" '
 ' "$tmp/home/.claude.json" >/dev/null
 jq -e '
     .skipDangerousModePermissionPrompt == true and
+    .copyOnSelect == false and
+    .statusLine.type == "command" and
+    .statusLine.command == "~/.claude/statusline.pl" and
     .env.DISABLE_TELEMETRY == "1" and
     .permissions.deny == ["mcp__*"]
 ' "$tmp/home/.claude/settings.json" >/dev/null
+test -x "$tmp/home/.claude/statusline.pl"
+head -n 1 "$tmp/home/.claude/statusline.pl" | grep -Fqx '#!/usr/bin/perl'
 grep -Fqx 'check_for_update_on_startup = false' "$tmp/home/.codex/config.toml"
 grep -Fqx 'approval_policy = "never"' "$tmp/home/.codex/config.toml"
 grep -Fqx 'sandbox_mode = "danger-full-access"' "$tmp/home/.codex/config.toml"
@@ -102,9 +107,12 @@ jq -e --arg cwd "$root" '
 ' "$tmp/existing-home/.claude.json" >/dev/null
 jq -e '
     .skipDangerousModePermissionPrompt == false and .custom == "keep" and
+    .copyOnSelect == false and
+    .statusLine.command == "~/.claude/statusline.pl" and
     .env.DISABLE_TELEMETRY == "0" and
     .env.DISABLE_ERROR_REPORTING == "1"
 ' "$tmp/existing-home/.claude/settings.json" >/dev/null
+test -x "$tmp/existing-home/.claude/statusline.pl"
 test "$(grep -Fc 'approval_policy = "on-request"' "$tmp/existing-home/.codex/config.toml")" -eq 1
 grep -Fqx 'check_for_update_on_startup = false' "$tmp/existing-home/.codex/config.toml"
 grep -Fqx 'sandbox_mode = "danger-full-access"' "$tmp/existing-home/.codex/config.toml"
@@ -161,28 +169,17 @@ grep -Fqx '  ok:     claude agy' <<<"$fail_output"
 grep -Fqx '  failed: codex' <<<"$fail_output"
 
 # A machine without jq (the default on Ubuntu, Debian, macOS and minimal
-# containers) must still get the onboarding flag seeded. claude's own installer
+# containers) must still get the first-run flags seeded. claude's own installer
 # creates ~/.claude.json first, so seeding always hits the "merge into an
-# existing file" path; without a jq-free fallback the flag was silently dropped
-# and claude showed its interactive first-run screen on every clean install.
-nojq_bin=$tmp/nojq-bin
-mkdir -p "$nojq_bin"
-for d in /usr/bin /bin; do
-    [ -d "$d" ] || continue
-    for f in "$d"/*; do
-        [ -e "$f" ] && ln -sf "$f" "$nojq_bin/$(basename -- "$f")"
-    done
-done
-rm -f "$nojq_bin/jq"
-if PATH="$nojq_bin" bash -c 'command -v jq' >/dev/null 2>&1; then
-    echo 'not ok - test could not hide jq from PATH' >&2
-    exit 1
-fi
-
+# existing file" path; without a jq-free fallback the flags were silently
+# dropped and claude showed its interactive first-run screens on every clean
+# install. H_AGENT_JQ points install.sh at a jq that does not exist, forcing the
+# no-jq path without rebuilding $PATH (the validation below still uses real jq).
 nojq_home=$tmp/nojq-home
-mkdir -p "$nojq_home"
-# Boilerplate the claude installer leaves behind (login/settings a real user
-# might have); none of it must be lost, and no hasCompletedOnboarding yet.
+mkdir -p "$nojq_home/.claude"
+# Boilerplate claude's installer / an existing user leaves behind: login, a
+# theme, auto-update protection -- none of it must be lost, and no first-run
+# flags present yet.
 cat >"$nojq_home/.claude.json" <<'EOF'
 {
   "installMethod": "native",
@@ -191,17 +188,28 @@ cat >"$nojq_home/.claude.json" <<'EOF'
   "oauthAccount": {"keep": true}
 }
 EOF
-PATH="$tmp/bin:$nojq_bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+cat >"$nojq_home/.claude/settings.json" <<'EOF'
+{
+  "theme": "keep-me"
+}
+EOF
+PATH="$tmp/bin:/usr/bin:/bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+    H_AGENT_JQ=jq-not-installed \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
-# Validate with the outer shell's jq: flag added, existing keys preserved,
-# file still valid JSON (no clobbered login/settings).
+# Validate with real jq: critical first-run flags added, existing keys kept,
+# files still valid JSON (no clobbered login/settings).
 jq -e '.hasCompletedOnboarding == true and .autoUpdates == false and
        .installMethod == "native" and .machineID == "keep-me" and
        .oauthAccount.keep == true' "$nojq_home/.claude.json" >/dev/null
-# Idempotent: a second no-jq run must not add the flag twice or corrupt it.
-PATH="$tmp/bin:$nojq_bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+jq -e '.skipDangerousModePermissionPrompt == true and .theme == "keep-me"' \
+    "$nojq_home/.claude/settings.json" >/dev/null
+# Idempotent: a second no-jq run must not add the flags twice or corrupt them.
+PATH="$tmp/bin:/usr/bin:/bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+    H_AGENT_JQ=jq-not-installed \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
 test "$(grep -Fc '"hasCompletedOnboarding"' "$nojq_home/.claude.json")" -eq 1
+test "$(grep -Fc '"skipDangerousModePermissionPrompt"' "$nojq_home/.claude/settings.json")" -eq 1
 jq -e '.hasCompletedOnboarding == true' "$nojq_home/.claude.json" >/dev/null
+jq -e '.skipDangerousModePermissionPrompt == true' "$nojq_home/.claude/settings.json" >/dev/null
 
 echo 'ok - installer behavior'

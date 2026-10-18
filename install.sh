@@ -8,6 +8,10 @@ url=${H_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/$repo/$version/h-ap
 destdir=${DESTDIR:-}
 claude_version=${CLAUDE_VERSION:-2.1.302}
 codex_version=${CODEX_VERSION:-0.163.0}
+# jq is an optional accelerator for merging into pre-existing config files; the
+# seed functions fall back to plain shell when it is absent. Overridable so the
+# test suite can exercise the no-jq path without rebuilding $PATH.
+jq_bin=${H_AGENT_JQ:-jq}
 
 if [ -z "${HOME:-}" ]; then
     if command -v getent >/dev/null 2>&1 && command -v id >/dev/null 2>&1; then
@@ -154,9 +158,9 @@ print_path_instruction() {
 seed_claude_state() {
     local target=$HOME/.claude.json tmp escaped_pwd
     if [ -s "$target" ]; then
-        if command -v jq >/dev/null 2>&1; then
+        if command -v "$jq_bin" >/dev/null 2>&1; then
             tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
-            if ! jq --arg cwd "$PWD" \
+            if ! "$jq_bin" --arg cwd "$PWD" \
                 '{hasCompletedOnboarding: true,
                   projects: {($cwd): {
                     hasTrustDialogAccepted: true,
@@ -201,18 +205,33 @@ seed_claude_settings() {
     local target=$HOME/.claude/settings.json tmp
     mkdir -p "$HOME/.claude"
     if [ -s "$target" ]; then
-        if ! command -v jq >/dev/null 2>&1; then
-            echo "warning: preserving existing $target; install jq to merge h-agent defaults" >&2
+        if ! command -v "$jq_bin" >/dev/null 2>&1; then
+            # No jq: seed only the flag that affects first-run interactivity
+            # (skipDangerousModePermissionPrompt suppresses the bypass-mode
+            # confirmation), leaving the rest of the user's settings untouched.
+            # The other keys here are preferences, not first-run blockers.
+            if ! grep -q '"skipDangerousModePermissionPrompt"' "$target"; then
+                tmp=$(mktemp "$HOME/.claude/settings.json.tmp.XXXXXXXX")
+                if awk '!seeded && /{/ { sub(/{/, "{\n  \"skipDangerousModePermissionPrompt\": true,"); seeded=1 } { print }' \
+                    "$target" >"$tmp" && [ -s "$tmp" ]; then
+                    mv "$tmp" "$target"
+                else
+                    rm -f "$tmp"
+                    echo "warning: could not seed skipDangerousModePermissionPrompt into $target" >&2
+                fi
+            fi
             return
         fi
         tmp=$(mktemp "$HOME/.claude/settings.json.tmp.XXXXXXXX")
-        if ! jq '
+        if ! "$jq_bin" '
             {promptSuggestionEnabled: false,
              awaySummaryEnabled: false,
              preferredNotifChannel: "notifications_disabled",
              fileCheckpointingEnabled: false,
              agentPushNotifEnabled: false,
              skipDangerousModePermissionPrompt: true,
+             copyOnSelect: false,
+             statusLine: {type: "command", command: "~/.claude/statusline.pl"},
              disableBundledSkills: true,
              enableAllProjectMcpServers: false,
              attribution: {commit: "", pr: "", sessionUrl: false},
@@ -238,6 +257,8 @@ seed_claude_settings() {
   "fileCheckpointingEnabled": false,
   "agentPushNotifEnabled": false,
   "skipDangerousModePermissionPrompt": true,
+  "copyOnSelect": false,
+  "statusLine": {"type": "command", "command": "~/.claude/statusline.pl"},
   "disableBundledSkills": true,
   "enableAllProjectMcpServers": false,
   "attribution": {"commit": "", "pr": "", "sessionUrl": false},
@@ -250,6 +271,47 @@ seed_claude_settings() {
   }
 }
 EOF
+}
+
+seed_claude_statusline() {
+    # The status line referenced by settings.json's statusLine.command. Written
+    # only when absent so a customized script is preserved. Needs perl with the
+    # core JSON::PP module; if perl is missing claude just shows no status line.
+    local target=$HOME/.claude/statusline.pl
+    mkdir -p "$HOME/.claude"
+    [ -e "$target" ] && return 0
+    cat >"$target" <<'PERL'
+#!/usr/bin/perl
+use strict; use warnings;
+use JSON::PP;
+local $/; my $raw = <STDIN>;
+my $d = eval { decode_json($raw) } || {};
+my $cw = $d->{context_window} || {};
+my $size = $cw->{context_window_size} || 0;
+my $cu = $cw->{current_usage};
+my $used = 0;
+if (ref $cu eq 'HASH') {
+  $used += ($cu->{$_} || 0) for qw(input_tokens cache_creation_input_tokens cache_read_input_tokens);
+} else { $used = $cw->{total_input_tokens} || 0; }
+my $pct = defined $cw->{used_percentage} ? $cw->{used_percentage} : ($size ? 100*$used/$size : 0);
+$pct = 0 if $pct < 0; $pct = 100 if $pct > 100;
+my $w = 10; my $f = int($pct/100*$w + 0.5);
+my $bar = ('█' x $f) . ('░' x ($w-$f));
+my $col = $pct >= 80 ? 31 : $pct >= 50 ? 33 : 32;
+sub fmt { my $n = shift; $n >= 1e6 ? sprintf("%.1fM",$n/1e6) : $n >= 1e3 ? sprintf("%.1fk",$n/1e3) : $n }
+my $name = $d->{session_name};
+if (!$name && $d->{session_id}) {
+  for my $f (glob("$ENV{HOME}/.claude/sessions/*.json")) {
+    open my $fh, '<', $f or next; my $c = <$fh>; close $fh;
+    my $s = eval { decode_json($c) } or next;
+    if (($s->{sessionId}||'') eq $d->{session_id}) { $name = $s->{name}; last; }
+  }
+}
+my $out = sprintf("\e[%dm%s\e[0m %.0f%% (%s/%s)", $col, $bar, $pct, fmt($used), $size ? fmt($size) : '?');
+$out .= " │ " . ($name || 'unnamed');
+print $out;
+PERL
+    chmod +x "$target"
 }
 
 codex_has_top_level_key() {
@@ -298,6 +360,7 @@ seed_cli_config() {
     mkdir -p "$HOME"
     seed_claude_state
     seed_claude_settings
+    seed_claude_statusline
     seed_codex_config
 }
 base_download_url=${url%/h-agent}
