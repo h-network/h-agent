@@ -9,6 +9,7 @@ usage() {
     cat <<'EOF'
 usage: h-agent [claude|agy|codex] [args...]
        h-agent probeProvider <url> [model-id]
+       h-agent --log [agent-name]
 
   claude   --dangerously-skip-permissions, tools limited to
            Bash/Read/Write/Edit/Glob/Grep
@@ -16,6 +17,8 @@ usage: h-agent [claude|agy|codex] [args...]
   codex    --dangerously-bypass-approvals-and-sandbox
   probeProvider
            verify that an endpoint serves Claude's Anthropic protocol
+  --log    print the capture log (AGENT_CAPTURE_FILE); optionally filtered
+           to one CLI (claude/codex) or AGENT_NAME instance label
 
 With no CLI named, starts $AGENT_CLI (default: claude).
 Any further arguments are passed straight to the chosen CLI.
@@ -25,6 +28,11 @@ Environment:
   AGENT_SKIP_PERMISSIONS  1 (default) skips approval prompts; 0 keeps them
   AGENT_CLAUDE_TOOLS      claude's tool list (default:
                           "Bash Read Write Edit Glob Grep"; empty = unrestricted)
+  AGENT_CAPTURE           1 (default) logs agent hook events; 0 disables (claude)
+  AGENT_CAPTURE_FILE      capture log path
+                          (default: ~/.local/state/h-agent/commands.jsonl)
+  AGENT_NAME              instance label recorded as "name" in each log entry
+                          (for distinguishing agents spun up by a framework)
 
 Local inference endpoint (claude only — codex and agy refuse):
   AGENT_PROVIDER_URL          endpoint base, e.g. http://10.0.0.5:8000
@@ -36,6 +44,77 @@ Local inference endpoint (claude only — codex and agy refuse):
 h-agent inherits the invoking user's environment, including HOME. Install it
 under any account; no runtime username or home directory is built in.
 EOF
+}
+
+json_escape() {
+    # Minimal JSON string escaping for values we embed (paths, commands).
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    printf '%s' "$s"
+}
+
+build_capture_settings() {
+    # Inline Claude settings that register the capture hook on every event we
+    # care about. Built with plain shell (no jq at runtime); merged by Claude
+    # into the user's own settings via --settings, writing no files.
+    local capture=$1 event hooks="" jcmd timeout=5
+    # The hook's "command" is a shell command line; quote the path for spaces.
+    jcmd=$(json_escape "\"$capture\" claude")
+    for event in SessionStart UserPromptSubmit PreToolUse PostToolUse Stop PreCompact PostCompact; do
+        [ -n "$hooks" ] && hooks+=","
+        hooks+="\"$event\":[{\"matcher\":\"*\",\"hooks\":[{\"type\":\"command\",\"command\":\"$jcmd\",\"timeout\":$timeout}]}]"
+    done
+    printf '{"hooks":{%s}}' "$hooks"
+}
+
+show_log() {
+    # Print the capture log, optionally filtered to one agent name. Read-only;
+    # formats with perl when available, otherwise prints raw JSON Lines (still
+    # filterable by a substring match on the agent field).
+    case "${1:-}" in
+        -h|--help|help) echo "usage: h-agent --log [agent-name]"; return 0 ;;
+    esac
+    if [ "$#" -gt 1 ]; then
+        echo "usage: h-agent --log [agent-name]" >&2
+        return 2
+    fi
+    local agent=${1:-} log=${AGENT_CAPTURE_FILE:-$HOME/.local/state/h-agent/commands.jsonl}
+    if [ ! -e "$log" ]; then
+        echo "no capture log at $log" >&2
+        return 1
+    fi
+    local perl_bin=${H_AGENT_PERL:-perl}
+    if command -v "$perl_bin" >/dev/null 2>&1; then
+        local perl_src
+        perl_src=$(cat <<'PERL'
+use strict; use warnings;
+use JSON::PP;
+my $want = defined $ARGV[0] ? $ARGV[0] : '';
+while (my $l = <STDIN>) {
+    my $d = eval { decode_json($l) };
+    next unless ref $d eq 'HASH';
+    # A filter matches either the CLI (agent) or the instance name.
+    next if length $want
+        && (($d->{agent} // '') ne $want)
+        && (($d->{name} // '') ne $want);
+    my $tag = $d->{agent} // '?';
+    $tag .= ':' . $d->{name} if defined $d->{name} && length $d->{name} && !ref $d->{name};
+    my @p = ($d->{ts} // '-', "[$tag]", $d->{event} // '-');
+    push @p, $d->{tool_name} if defined $d->{tool_name} && !ref $d->{tool_name};
+    my $line = join(' ', @p);
+    $line .= ': ' . $d->{command} if defined $d->{command} && !ref $d->{command};
+    print $line, "\n";
+}
+PERL
+)
+        "$perl_bin" -e "$perl_src" -- "$agent" <"$log"
+    elif [ -n "$agent" ]; then
+        # No perl: substring-match either the CLI or the instance name field.
+        grep -F -e "\"agent\":\"$agent\"" -e "\"name\":\"$agent\"" "$log" || true
+    else
+        cat "$log"
+    fi
 }
 
 probe_provider_usage() {
@@ -152,6 +231,12 @@ if [ "${1:-}" = probeProvider ] || [ "${1:-}" = probe-provider ]; then
     exit $?
 fi
 
+if [ "${1:-}" = --log ] || [ "${1:-}" = log ]; then
+    shift
+    show_log "$@"
+    exit $?
+fi
+
 cli="${AGENT_CLI:-claude}"
 case "${1:-}" in
     claude|agy|codex) cli="$1"; shift ;;
@@ -206,6 +291,26 @@ fi
 skip="${AGENT_SKIP_PERMISSIONS:-1}"
 tools="${AGENT_CLAUDE_TOOLS-Bash Read Write Edit Glob Grep}"
 
+# Command/event capture (claude only for now; codex hooks are a follow-up).
+# On by default; AGENT_CAPTURE=0 disables it. The capture script lives next to
+# this launcher and logs to AGENT_CAPTURE_FILE.
+capture_settings=""
+if [ "${AGENT_CAPTURE:-1}" != 0 ] && [ "$cli" = claude ]; then
+    self=$0
+    case "$self" in
+        */*) ;;
+        *) self=$(command -v -- "$self" 2>/dev/null || printf '%s' "$self") ;;
+    esac
+    self_dir=$(CDPATH='' cd -- "$(dirname -- "$self")" 2>/dev/null && pwd)
+    capture="$self_dir/h-agent-capture"
+    if [ -n "$self_dir" ] && [ -x "$capture" ]; then
+        export AGENT_CAPTURE_FILE="${AGENT_CAPTURE_FILE:-$HOME/.local/state/h-agent/commands.jsonl}"
+        # Propagate a caller-supplied instance name to the capture hook.
+        [ -n "${AGENT_NAME:-}" ] && export AGENT_NAME
+        capture_settings=$(build_capture_settings "$capture")
+    fi
+fi
+
 flags=()
 case "$cli" in
     claude)
@@ -213,6 +318,7 @@ case "$cli" in
         # Shell splitting is intentional: each tool is a separate argument.
         # shellcheck disable=SC2206
         [ -n "$tools" ] && flags+=(--tools $tools)
+        [ -n "$capture_settings" ] && flags+=(--settings "$capture_settings")
         ;;
     agy)
         [ "$skip" = "1" ] && flags+=(--dangerously-skip-permissions)

@@ -34,6 +34,8 @@ case "$url" in
         body='echo installed-test-setupConfigDir' ;;
     https://example.invalid/h-agent-profile-lib.sh)
         body='echo installed-test-profile-lib' ;;
+    https://example.invalid/h-agent-capture)
+        body='echo installed-test-capture' ;;
     https://claude.ai/install.sh)
         body='printf "claude %s\\n" "$*" >>"$TEST_LOG"; mkdir -p "$HOME/.local/bin"; printf "#!/usr/bin/env bash\\necho %s \\(Claude Code\\)\\n" "$1" >"$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"' ;;
     https://chatgpt.com/codex/install.sh)
@@ -60,6 +62,8 @@ test -x "$tmp/home/.local/bin/setupConfigDir"
 test "$("$tmp/home/.local/bin/setupConfigDir")" = installed-test-setupConfigDir
 test -x "$tmp/home/.local/bin/h-agent-profile-lib.sh"
 test "$("$tmp/home/.local/bin/h-agent-profile-lib.sh")" = installed-test-profile-lib
+test -x "$tmp/home/.local/bin/h-agent-capture"
+test "$("$tmp/home/.local/bin/h-agent-capture")" = installed-test-capture
 # These variables must remain literal in the printed command.
 # shellcheck disable=SC2016
 grep -Fqx 'echo '\''export PATH="$HOME/.local/bin:$PATH"'\'' >> "$HOME/.zshrc" && source "$HOME/.zshrc"' <<<"$output"
@@ -76,6 +80,8 @@ jq -e '
     .copyOnSelect == false and
     .statusLine.type == "command" and
     .statusLine.command == "~/.claude/statusline.pl" and
+    .modelSettings["claude-sonnet-5-5"].autoCompactWindow == 500000 and
+    .modelSettings["claude-opus-4-8"].autoCompactWindow == 500000 and
     .env.DISABLE_TELEMETRY == "1" and
     .permissions.deny == ["mcp__*"]
 ' "$tmp/home/.claude/settings.json" >/dev/null
@@ -109,6 +115,7 @@ jq -e '
     .skipDangerousModePermissionPrompt == false and .custom == "keep" and
     .copyOnSelect == false and
     .statusLine.command == "~/.claude/statusline.pl" and
+    .modelSettings["claude-opus-4-8"].autoCompactWindow == 500000 and
     .env.DISABLE_TELEMETRY == "0" and
     .env.DISABLE_ERROR_REPORTING == "1"
 ' "$tmp/existing-home/.claude/settings.json" >/dev/null
@@ -136,6 +143,7 @@ test -x "$tmp/stage/opt/h-agent/bin/h-agent"
 test -x "$tmp/stage/opt/h-agent/bin/seedProfile"
 test -x "$tmp/stage/opt/h-agent/bin/setupConfigDir"
 test -x "$tmp/stage/opt/h-agent/bin/h-agent-profile-lib.sh"
+test -x "$tmp/stage/opt/h-agent/bin/h-agent-capture"
 test "$(wc -l <"$TEST_LOG")" -eq "$before"
 test ! -e "$tmp/stage-home/.claude.json"
 test ! -e "$tmp/stage-home/.codex/config.toml"
@@ -158,6 +166,7 @@ test -x "$codex_fail_home/.local/bin/h-agent"
 test -x "$codex_fail_home/.local/bin/seedProfile"
 test -x "$codex_fail_home/.local/bin/setupConfigDir"
 test -x "$codex_fail_home/.local/bin/h-agent-profile-lib.sh"
+test -x "$codex_fail_home/.local/bin/h-agent-capture"
 test -x "$codex_fail_home/.local/bin/claude"
 test -x "$codex_fail_home/.local/bin/agy"
 test ! -e "$codex_fail_home/.local/bin/codex"
@@ -168,48 +177,66 @@ grep -Fq 'CLI install summary:' <<<"$fail_output"
 grep -Fqx '  ok:     claude agy' <<<"$fail_output"
 grep -Fqx '  failed: codex' <<<"$fail_output"
 
-# A machine without jq (the default on Ubuntu, Debian, macOS and minimal
-# containers) must still get the first-run flags seeded. claude's own installer
-# creates ~/.claude.json first, so seeding always hits the "merge into an
-# existing file" path; without a jq-free fallback the flags were silently
-# dropped and claude showed its interactive first-run screens on every clean
-# install. H_AGENT_JQ points install.sh at a jq that does not exist, forcing the
-# no-jq path without rebuilding $PATH (the validation below still uses real jq).
-nojq_home=$tmp/nojq-home
-mkdir -p "$nojq_home/.claude"
-# Boilerplate claude's installer / an existing user leaves behind: login, a
-# theme, auto-update protection -- none of it must be lost, and no first-run
-# flags present yet.
-cat >"$nojq_home/.claude.json" <<'EOF'
-{
-  "installMethod": "native",
-  "autoUpdates": false,
-  "machineID": "keep-me",
-  "oauthAccount": {"keep": true}
-}
+# Seeding merges into an existing config in three tiers: jq, then perl, then a
+# minimal plain-shell injection. The jq tier is covered above; these two cover
+# the others. H_AGENT_JQ / H_AGENT_PERL point install.sh at tools that do not
+# exist, selecting a tier without rebuilding $PATH (validation uses real jq).
+# claude's own installer writes ~/.claude.json first, so seeding always takes
+# the "merge into an existing file" path on a real install.
+seed_boilerplate() {
+    # seed_boilerplate <home> : pre-existing files a real user/installer leaves.
+    mkdir -p "$1/.claude"
+    cat >"$1/.claude.json" <<'EOF'
+{"installMethod":"native","autoUpdates":false,"machineID":"keep-me","oauthAccount":{"keep":true}}
 EOF
-cat >"$nojq_home/.claude/settings.json" <<'EOF'
-{
-  "theme": "keep-me"
-}
+    cat >"$1/.claude/settings.json" <<'EOF'
+{"theme":"keep-me"}
 EOF
-PATH="$tmp/bin:/usr/bin:/bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+}
+
+# --- perl tier: jq absent, perl present -> full deep-merge, nothing clobbered.
+perl_home=$tmp/perl-home
+seed_boilerplate "$perl_home"
+PATH="$tmp/bin:/usr/bin:/bin" HOME="$perl_home" H_AGENT_INSTALL_CLIS=0 \
     H_AGENT_JQ=jq-not-installed \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
-# Validate with real jq: critical first-run flags added, existing keys kept,
-# files still valid JSON (no clobbered login/settings).
 jq -e '.hasCompletedOnboarding == true and .autoUpdates == false and
        .installMethod == "native" and .machineID == "keep-me" and
-       .oauthAccount.keep == true' "$nojq_home/.claude.json" >/dev/null
-jq -e '.skipDangerousModePermissionPrompt == true and .theme == "keep-me"' \
-    "$nojq_home/.claude/settings.json" >/dev/null
-# Idempotent: a second no-jq run must not add the flags twice or corrupt them.
-PATH="$tmp/bin:/usr/bin:/bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+       .oauthAccount.keep == true and (.projects | length) == 1' \
+    "$perl_home/.claude.json" >/dev/null
+jq -e '.skipDangerousModePermissionPrompt == true and .theme == "keep-me" and
+       .copyOnSelect == false and
+       .statusLine.command == "~/.claude/statusline.pl" and
+       .modelSettings["claude-opus-4-8"].autoCompactWindow == 500000' \
+    "$perl_home/.claude/settings.json" >/dev/null
+# Idempotent across a second perl-tier run: values stable, nothing duplicated.
+PATH="$tmp/bin:/usr/bin:/bin" HOME="$perl_home" H_AGENT_INSTALL_CLIS=0 \
     H_AGENT_JQ=jq-not-installed \
     H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
-test "$(grep -Fc '"hasCompletedOnboarding"' "$nojq_home/.claude.json")" -eq 1
-test "$(grep -Fc '"skipDangerousModePermissionPrompt"' "$nojq_home/.claude/settings.json")" -eq 1
-jq -e '.hasCompletedOnboarding == true' "$nojq_home/.claude.json" >/dev/null
-jq -e '.skipDangerousModePermissionPrompt == true' "$nojq_home/.claude/settings.json" >/dev/null
+jq -e '.hasCompletedOnboarding == true and (.projects | length) == 1' \
+    "$perl_home/.claude.json" >/dev/null
+jq -e '.theme == "keep-me" and
+       .modelSettings["claude-opus-4-8"].autoCompactWindow == 500000' \
+    "$perl_home/.claude/settings.json" >/dev/null
+
+# --- minimal tier: neither jq nor perl -> only the first-run-critical flags.
+min_home=$tmp/min-home
+seed_boilerplate "$min_home"
+PATH="$tmp/bin:/usr/bin:/bin" HOME="$min_home" H_AGENT_INSTALL_CLIS=0 \
+    H_AGENT_JQ=jq-not-installed H_AGENT_PERL=perl-not-installed \
+    H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
+# Onboarding/skip flags injected; existing keys kept; preferences NOT added.
+jq -e '.hasCompletedOnboarding == true and .machineID == "keep-me" and
+       .oauthAccount.keep == true and (.projects == null)' \
+    "$min_home/.claude.json" >/dev/null
+jq -e '.skipDangerousModePermissionPrompt == true and .theme == "keep-me" and
+       (.modelSettings == null) and (.statusLine == null) and (.copyOnSelect == null)' \
+    "$min_home/.claude/settings.json" >/dev/null
+# Idempotent: a second minimal run must not add the flags twice or corrupt them.
+PATH="$tmp/bin:/usr/bin:/bin" HOME="$min_home" H_AGENT_INSTALL_CLIS=0 \
+    H_AGENT_JQ=jq-not-installed H_AGENT_PERL=perl-not-installed \
+    H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
+test "$(grep -Fc '"hasCompletedOnboarding"' "$min_home/.claude.json")" -eq 1
+test "$(grep -Fc '"skipDangerousModePermissionPrompt"' "$min_home/.claude/settings.json")" -eq 1
 
 echo 'ok - installer behavior'

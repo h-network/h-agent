@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Copyright 2026 h-network
+#
+# h-agent-capture — append one JSON Lines record per agent hook event.
+#
+# Reads the hook payload as JSON on stdin and records commands + metadata only
+# (event name, tool name, the Bash command, ids and cwd) -- never prompts and
+# never tool output. It must never disrupt the agent that invoked it: it always
+# exits 0, tolerates malformed input and an unwritable log, and needs no jq. A
+# perl with the core JSON::PP module parses the payload; without perl it records
+# a minimal, payload-free line so the event is still counted.
+#
+# Usage (from a hook):  h-agent-capture <agent-name>
+
+# Nothing below may fail the agent, whatever goes wrong.
+trap 'exit 0' EXIT
+set -u
+
+agent=${1:-unknown}
+# Sanitize: keep a conservative charset, fold anything else to '_'.
+agent=$(printf '%s' "$agent" | tr -c 'A-Za-z0-9._-' '_' 2>/dev/null)
+[ -n "$agent" ] || agent=unknown
+
+# Optional caller-supplied label (e.g. a framework's per-agent instance name),
+# recorded verbatim as the "name" field when set.
+name=${AGENT_NAME:-}
+
+log=${AGENT_CAPTURE_FILE:-$HOME/.local/state/h-agent/commands.jsonl}
+dir=${log%/*}
+[ "$dir" = "$log" ] && dir=.
+mkdir -p "$dir" 2>/dev/null || exit 0
+# Create the log private (0600) before the first write; never loosen an
+# existing one.
+if [ ! -e "$log" ]; then
+    ( umask 077; : >"$log" ) 2>/dev/null || exit 0
+fi
+[ -w "$log" ] || exit 0
+
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || ts=""
+raw=$(cat 2>/dev/null) || raw=""
+
+perl_bin=${H_AGENT_PERL:-perl}
+if command -v "$perl_bin" >/dev/null 2>&1; then
+    perl_src=$(cat <<'PERL'
+use strict; use warnings;
+use JSON::PP;
+my ($agent, $ts, $name) = @ARGV;
+local $/;
+my $raw = <STDIN>;
+$raw = '' unless defined $raw;
+my $d = eval { decode_json($raw) };
+$d = {} unless ref $d eq 'HASH';
+my %out = (ts => $ts, agent => $agent);
+$out{name} = $name if defined $name && length $name;
+$out{event} = $d->{hook_event_name}
+    if defined $d->{hook_event_name} && !ref $d->{hook_event_name};
+for my $k (qw(session_id tool_name tool_use_id cwd)) {
+    $out{$k} = $d->{$k} if defined $d->{$k} && !ref $d->{$k};
+}
+# Only the Bash command is recorded; other tool inputs (file contents, prompts,
+# tool output) are intentionally dropped.
+my $ti = $d->{tool_input};
+$out{command} = $ti->{command}
+    if ref $ti eq 'HASH' && defined $ti->{command} && !ref $ti->{command};
+print encode_json(\%out), "\n";
+PERL
+)
+    printf '%s' "$raw" | "$perl_bin" -e "$perl_src" -- "$agent" "$ts" "$name" >>"$log" 2>/dev/null
+else
+    nkey=""
+    if [ -n "$name" ]; then
+        nesc=${name//\\/\\\\}
+        nesc=${nesc//\"/\\\"}
+        nkey="\"name\":\"$nesc\","
+    fi
+    printf '{"ts":"%s","agent":"%s",%s"note":"perl unavailable, payload not parsed"}\n' \
+        "$ts" "$agent" "$nkey" >>"$log" 2>/dev/null
+fi
+exit 0

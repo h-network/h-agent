@@ -23,6 +23,7 @@ export PATH="$tmp:$PATH"
 
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 assert_has() { grep -Fqx -- "$2" <<<"$1" || fail "missing: $2"; }
+assert_has_sub() { grep -Fq -- "$2" <<<"$1" || fail "missing substring: $2"; }
 
 output=$(HOME=/chosen/home "$root/h-agent" codex run)
 assert_has "$output" 'HOME=/chosen/home'
@@ -49,6 +50,68 @@ fi
 
 if "$root/h-agent" unknown >/dev/null 2>&1; then
     fail 'unknown CLI was accepted'
+fi
+
+# Capture is on by default for claude: --settings carries exactly the seven
+# hook events, wired to h-agent-capture.
+output=$(HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
+for event in SessionStart UserPromptSubmit PreToolUse PostToolUse Stop PreCompact PostCompact; do
+    assert_has_sub "$output" "\"$event\""
+done
+assert_has_sub "$output" '"type":"command"'
+assert_has_sub "$output" 'h-agent-capture\" claude'
+# A disabled or non-claude run injects no hook settings.
+output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
+if grep -Fq '"hooks"' <<<"$output"; then
+    fail 'capture settings present when AGENT_CAPTURE=0'
+fi
+output=$(HOME="$tmp/caphome" "$root/h-agent" codex 2>/dev/null)
+if grep -Fq '"hooks"' <<<"$output"; then
+    fail 'capture settings injected for codex'
+fi
+
+# --log prints the capture log, optionally filtered to one agent.
+caplog="$tmp/commands.jsonl"
+cat >"$caplog" <<'EOF'
+{"ts":"2026-10-18T04:00:00Z","agent":"claude","name":"researcher","event":"PreToolUse","tool_name":"Bash","command":"ls -la"}
+{"ts":"2026-10-18T04:00:01Z","agent":"claude","name":"researcher","event":"SessionStart"}
+{"ts":"2026-10-18T04:00:02Z","agent":"codex","name":"coder","event":"PreToolUse","tool_name":"Bash","command":"git status"}
+EOF
+output=$(AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log)
+assert_has_sub "$output" 'ls -la'
+assert_has_sub "$output" 'git status'
+# filtered to claude: its command shows, codex's does not
+output=$(AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log claude)
+assert_has_sub "$output" 'ls -la'
+if grep -Fq 'git status' <<<"$output"; then
+    fail '--log claude leaked codex entries'
+fi
+# the bare "log" verb works too
+output=$(AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" log codex)
+assert_has_sub "$output" 'git status'
+if grep -Fq 'ls -la' <<<"$output"; then
+    fail '--log codex leaked claude entries'
+fi
+# filtering works without perl (substring match on the agent field)
+output=$(H_AGENT_PERL=perl-not-installed AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log codex)
+assert_has_sub "$output" 'git status'
+if grep -Fq 'ls -la' <<<"$output"; then
+    fail '--log codex (no perl) leaked claude entries'
+fi
+# filtering by AGENT_NAME instance label works (perl and no-perl paths)
+output=$(AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log researcher)
+assert_has_sub "$output" 'ls -la'
+if grep -Fq 'git status' <<<"$output"; then
+    fail '--log researcher leaked other instances'
+fi
+output=$(H_AGENT_PERL=perl-not-installed AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log coder)
+assert_has_sub "$output" 'git status'
+if grep -Fq 'ls -la' <<<"$output"; then
+    fail '--log coder (no perl) leaked other instances'
+fi
+# a missing log is an error, not a crash
+if AGENT_CAPTURE_FILE="$tmp/absent.jsonl" "$root/h-agent" --log >/dev/null 2>&1; then
+    fail '--log succeeded with no log file'
 fi
 
 printf 'ok - h-agent behavior\n'

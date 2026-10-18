@@ -13,15 +13,18 @@ install:
 	install -m 0755 h-app/seedProfile "$(DESTDIR)$(bindir)/seedProfile"
 	install -m 0755 h-app/setupConfigDir "$(DESTDIR)$(bindir)/setupConfigDir"
 	install -m 0755 h-app/h-agent-profile-lib.sh "$(DESTDIR)$(bindir)/h-agent-profile-lib.sh"
+	install -m 0755 h-app/h-agent-capture "$(DESTDIR)$(bindir)/h-agent-capture"
 
 uninstall:
 	rm -f "$(DESTDIR)$(bindir)/h-agent"
 	rm -f "$(DESTDIR)$(bindir)/seedProfile"
 	rm -f "$(DESTDIR)$(bindir)/setupConfigDir"
 	rm -f "$(DESTDIR)$(bindir)/h-agent-profile-lib.sh"
+	rm -f "$(DESTDIR)$(bindir)/h-agent-capture"
 
 test:
 	./h-app/test/h-agent-test
+	./h-app/test/h-agent-capture-test
 	./h-app/test/probe-provider-test
 	./h-app/test/install-test
 	./h-app/test/profile-test

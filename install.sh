@@ -8,10 +8,52 @@ url=${H_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/$repo/$version/h-ap
 destdir=${DESTDIR:-}
 claude_version=${CLAUDE_VERSION:-2.1.302}
 codex_version=${CODEX_VERSION:-0.163.0}
-# jq is an optional accelerator for merging into pre-existing config files; the
-# seed functions fall back to plain shell when it is absent. Overridable so the
-# test suite can exercise the no-jq path without rebuilding $PATH.
+# Merging h-agent's defaults into a pre-existing config file needs a JSON
+# parser. We try jq first, then perl (its JSON::PP is a core module, and perl
+# ships by default on Ubuntu/Debian/macOS where jq does not), then fall back to
+# a minimal plain-shell injection of just the first-run-critical keys. Both are
+# overridable so the test suite can exercise each tier without rebuilding $PATH.
 jq_bin=${H_AGENT_JQ:-jq}
+perl_bin=${H_AGENT_PERL:-perl}
+
+perl_merge_into() {
+    # perl_merge_into <defaults-json> <target-file>
+    # Deep-merges <defaults-json> underneath the existing file (existing values
+    # win; objects merge recursively), in place. Leaves the file untouched and
+    # returns nonzero if perl fails or either side is not a JSON object.
+    local defaults=$1 target=$2 tmp
+    tmp=$(mktemp "$target.tmp.XXXXXXXX") || return 1
+    # $-sigils below are perl, not shell.
+    # shellcheck disable=SC2016
+    if printf '%s' "$defaults" | "$perl_bin" -e '
+        use strict; use warnings; use JSON::PP;
+        local $/;
+        my $draw = <STDIN>;
+        $draw = "{}" unless defined $draw && length $draw;
+        my $def = eval { decode_json($draw) };
+        exit 1 unless ref $def eq "HASH";
+        open my $fh, "<", $ARGV[0] or exit 1;
+        my $eraw = <$fh>; close $fh;
+        $eraw = "{}" unless defined $eraw && length $eraw;
+        my $ex = eval { decode_json($eraw) };
+        exit 1 unless ref $ex eq "HASH";
+        sub merge {
+            my ($a, $b) = @_;
+            return $b unless ref $a eq "HASH" && ref $b eq "HASH";
+            my %o = %$a;
+            for my $k (keys %$b) {
+                $o{$k} = exists $a->{$k} ? merge($a->{$k}, $b->{$k}) : $b->{$k};
+            }
+            return \%o;
+        }
+        print JSON::PP->new->canonical->pretty->encode(merge($def, $ex));
+    ' -- "$target" >"$tmp" && [ -s "$tmp" ]; then
+        mv "$tmp" "$target"
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
 
 if [ -z "${HOME:-}" ]; then
     if command -v getent >/dev/null 2>&1 && command -v id >/dev/null 2>&1; then
@@ -156,72 +198,94 @@ print_path_instruction() {
 }
 
 seed_claude_state() {
-    local target=$HOME/.claude.json tmp escaped_pwd
-    if [ -s "$target" ]; then
-        if command -v "$jq_bin" >/dev/null 2>&1; then
-            tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
-            if ! "$jq_bin" --arg cwd "$PWD" \
-                '{hasCompletedOnboarding: true,
-                  projects: {($cwd): {
-                    hasTrustDialogAccepted: true,
-                    hasCompletedProjectOnboarding: true
-                  }}} * .' "$target" >"$tmp"; then
-                rm -f "$tmp"
-                echo "error: existing $target is not valid JSON; leaving it unchanged" >&2
-                exit 1
-            fi
-            mv "$tmp" "$target"
-            return
-        fi
-        # No jq. claude's own installer already created this file, so the
-        # fresh-write path below never runs on a real install -- and jq is not
-        # installed by default on Ubuntu, Debian, macOS or minimal containers.
-        # Without the onboarding flag claude shows its interactive first-run
-        # screen, so seed just that flag with plain shell, leaving everything
-        # else (login, settings, trusted projects) untouched. claude writes a
-        # well-formed object, so inject the key after the first '{'. The
-        # per-project trust block is left to the jq / fresh-write paths;
-        # --dangerously-skip-permissions already covers the trust dialog.
-        if ! grep -q '"hasCompletedOnboarding"' "$target"; then
-            tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
-            if awk '!seeded && /{/ { sub(/{/, "{\n  \"hasCompletedOnboarding\": true,"); seeded=1 } { print }' \
-                "$target" >"$tmp" && [ -s "$tmp" ]; then
-                mv "$tmp" "$target"
-            else
-                rm -f "$tmp"
-                echo "warning: could not seed hasCompletedOnboarding into $target" >&2
-            fi
-        fi
-        return
-    fi
+    local target=$HOME/.claude.json tmp escaped_pwd defaults
     escaped_pwd=${PWD//\\/\\\\}
     escaped_pwd=${escaped_pwd//\"/\\\"}
     escaped_pwd=${escaped_pwd//$'\n'/\\n}
-    printf '{\n  "hasCompletedOnboarding": true,\n  "projects": {\n    "%s": {\n      "hasTrustDialogAccepted": true,\n      "hasCompletedProjectOnboarding": true\n    }\n  }\n}\n' \
-        "$escaped_pwd" >"$target"
+    defaults=$(printf '{"hasCompletedOnboarding":true,"projects":{"%s":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' \
+        "$escaped_pwd")
+
+    if [ ! -s "$target" ]; then
+        printf '%s\n' "$defaults" >"$target"
+        return
+    fi
+    # Existing file: merge our defaults underneath it (existing values win).
+    if command -v "$jq_bin" >/dev/null 2>&1; then
+        tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
+        # $cwd is a jq variable in the filter, not a shell expansion.
+        # shellcheck disable=SC2016
+        if ! "$jq_bin" --arg cwd "$PWD" \
+            '{hasCompletedOnboarding: true,
+              projects: {($cwd): {
+                hasTrustDialogAccepted: true,
+                hasCompletedProjectOnboarding: true
+              }}} * .' "$target" >"$tmp"; then
+            rm -f "$tmp"
+            echo "error: existing $target is not valid JSON; leaving it unchanged" >&2
+            exit 1
+        fi
+        mv "$tmp" "$target"
+        return
+    fi
+    if command -v "$perl_bin" >/dev/null 2>&1 && perl_merge_into "$defaults" "$target"; then
+        return
+    fi
+    # Neither jq nor a working perl. claude's own installer already created this
+    # file, so the fresh-write path above never runs on a real install. Without
+    # the onboarding flag claude shows its interactive first-run screen, so seed
+    # just that flag with plain shell, leaving everything else (login, settings,
+    # trusted projects) untouched. claude writes a well-formed object, so inject
+    # the key after the first '{'. The per-project trust block is left to the
+    # jq / perl / fresh-write paths; --dangerously-skip-permissions already
+    # covers the trust dialog.
+    if ! grep -q '"hasCompletedOnboarding"' "$target"; then
+        tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
+        if awk '!seeded && /{/ { sub(/{/, "{\n  \"hasCompletedOnboarding\": true,"); seeded=1 } { print }' \
+            "$target" >"$tmp" && [ -s "$tmp" ]; then
+            mv "$tmp" "$target"
+        else
+            rm -f "$tmp"
+            echo "warning: could not seed hasCompletedOnboarding into $target" >&2
+        fi
+    fi
 }
 
 seed_claude_settings() {
-    local target=$HOME/.claude/settings.json tmp
+    local target=$HOME/.claude/settings.json tmp defaults
     mkdir -p "$HOME/.claude"
-    if [ -s "$target" ]; then
-        if ! command -v "$jq_bin" >/dev/null 2>&1; then
-            # No jq: seed only the flag that affects first-run interactivity
-            # (skipDangerousModePermissionPrompt suppresses the bypass-mode
-            # confirmation), leaving the rest of the user's settings untouched.
-            # The other keys here are preferences, not first-run blockers.
-            if ! grep -q '"skipDangerousModePermissionPrompt"' "$target"; then
-                tmp=$(mktemp "$HOME/.claude/settings.json.tmp.XXXXXXXX")
-                if awk '!seeded && /{/ { sub(/{/, "{\n  \"skipDangerousModePermissionPrompt\": true,"); seeded=1 } { print }' \
-                    "$target" >"$tmp" && [ -s "$tmp" ]; then
-                    mv "$tmp" "$target"
-                else
-                    rm -f "$tmp"
-                    echo "warning: could not seed skipDangerousModePermissionPrompt into $target" >&2
-                fi
-            fi
-            return
-        fi
+    defaults=$(cat <<'EOF'
+{
+  "promptSuggestionEnabled": false,
+  "awaySummaryEnabled": false,
+  "preferredNotifChannel": "notifications_disabled",
+  "fileCheckpointingEnabled": false,
+  "agentPushNotifEnabled": false,
+  "skipDangerousModePermissionPrompt": true,
+  "copyOnSelect": false,
+  "statusLine": {"type": "command", "command": "~/.claude/statusline.pl"},
+  "modelSettings": {
+    "claude-sonnet-5-5": {"autoCompactWindow": 500000},
+    "claude-opus-4-8": {"autoCompactWindow": 500000}
+  },
+  "disableBundledSkills": true,
+  "enableAllProjectMcpServers": false,
+  "attribution": {"commit": "", "pr": "", "sessionUrl": false},
+  "permissions": {"deny": ["mcp__*"]},
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"
+  }
+}
+EOF
+)
+    if [ ! -s "$target" ]; then
+        printf '%s\n' "$defaults" >"$target"
+        return
+    fi
+    # Existing file: merge our defaults underneath it (existing values win).
+    if command -v "$jq_bin" >/dev/null 2>&1; then
         tmp=$(mktemp "$HOME/.claude/settings.json.tmp.XXXXXXXX")
         if ! "$jq_bin" '
             {promptSuggestionEnabled: false,
@@ -232,6 +296,8 @@ seed_claude_settings() {
              skipDangerousModePermissionPrompt: true,
              copyOnSelect: false,
              statusLine: {type: "command", command: "~/.claude/statusline.pl"},
+             modelSettings: {"claude-sonnet-5-5": {autoCompactWindow: 500000},
+                             "claude-opus-4-8": {autoCompactWindow: 500000}},
              disableBundledSkills: true,
              enableAllProjectMcpServers: false,
              attribution: {commit: "", pr: "", sessionUrl: false},
@@ -249,28 +315,23 @@ seed_claude_settings() {
         mv "$tmp" "$target"
         return
     fi
-    cat >"$target" <<'EOF'
-{
-  "promptSuggestionEnabled": false,
-  "awaySummaryEnabled": false,
-  "preferredNotifChannel": "notifications_disabled",
-  "fileCheckpointingEnabled": false,
-  "agentPushNotifEnabled": false,
-  "skipDangerousModePermissionPrompt": true,
-  "copyOnSelect": false,
-  "statusLine": {"type": "command", "command": "~/.claude/statusline.pl"},
-  "disableBundledSkills": true,
-  "enableAllProjectMcpServers": false,
-  "attribution": {"commit": "", "pr": "", "sessionUrl": false},
-  "permissions": {"deny": ["mcp__*"]},
-  "env": {
-    "DISABLE_TELEMETRY": "1",
-    "DISABLE_ERROR_REPORTING": "1",
-    "DISABLE_FEEDBACK_COMMAND": "1",
-    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"
-  }
-}
-EOF
+    if command -v "$perl_bin" >/dev/null 2>&1 && perl_merge_into "$defaults" "$target"; then
+        return
+    fi
+    # Neither jq nor a working perl: seed only the flag that affects first-run
+    # interactivity (skipDangerousModePermissionPrompt suppresses the bypass-mode
+    # confirmation), leaving the rest of the user's settings untouched. The other
+    # keys above are preferences, not first-run blockers.
+    if ! grep -q '"skipDangerousModePermissionPrompt"' "$target"; then
+        tmp=$(mktemp "$HOME/.claude/settings.json.tmp.XXXXXXXX")
+        if awk '!seeded && /{/ { sub(/{/, "{\n  \"skipDangerousModePermissionPrompt\": true,"); seeded=1 } { print }' \
+            "$target" >"$tmp" && [ -s "$tmp" ]; then
+            mv "$tmp" "$target"
+        else
+            rm -f "$tmp"
+            echo "warning: could not seed skipDangerousModePermissionPrompt into $target" >&2
+        fi
+    fi
 }
 
 seed_claude_statusline() {
@@ -367,6 +428,7 @@ base_download_url=${url%/h-agent}
 seedprofile_url=${H_AGENT_SEEDPROFILE_URL:-$base_download_url/seedProfile}
 setupconfigdir_url=${H_AGENT_SETUPCONFIGDIR_URL:-$base_download_url/setupConfigDir}
 profilelib_url=${H_AGENT_PROFILELIB_URL:-$base_download_url/h-agent-profile-lib.sh}
+capture_url=${H_AGENT_CAPTURE_URL:-$base_download_url/h-agent-capture}
 
 download_verified() {
     local from=$1 to=$2
@@ -381,6 +443,7 @@ download_verified "$url" "$download"
 download_verified "$seedprofile_url" "$tmpdir/seedProfile"
 download_verified "$setupconfigdir_url" "$tmpdir/setupConfigDir"
 download_verified "$profilelib_url" "$tmpdir/h-agent-profile-lib.sh"
+download_verified "$capture_url" "$tmpdir/h-agent-capture"
 
 cli_ok=()
 cli_failed=()
@@ -400,6 +463,7 @@ install -m 0755 "$download" "$bindir/h-agent"
 install -m 0755 "$tmpdir/seedProfile" "$bindir/seedProfile"
 install -m 0755 "$tmpdir/setupConfigDir" "$bindir/setupConfigDir"
 install -m 0755 "$tmpdir/h-agent-profile-lib.sh" "$bindir/h-agent-profile-lib.sh"
+install -m 0755 "$tmpdir/h-agent-capture" "$bindir/h-agent-capture"
 
 echo "installed h-agent to $bindir/h-agent"
 if [ -z "$destdir" ]; then

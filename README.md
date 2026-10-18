@@ -41,8 +41,9 @@ script only exits nonzero, with a final ok/failed summary, after everything
 else has been attempted.
 
 The installer also seeds unattended defaults in the invoking identity's
-`$HOME`: Claude's completed-onboarding state and settings, plus Codex's update,
-approval, and sandbox defaults. Missing values are added, but existing user
+`$HOME`: Claude's completed-onboarding state and settings (including a status
+line and a 500k-token auto-compact window for the default Sonnet/Opus models),
+plus Codex's update, approval, and sandbox defaults. Missing values are added, but existing user
 values are never replaced. Project trust is granted only to the directory from
 which the installer is run. The installer does not create or switch users and
 works the same for root or any provisioned user/UID.
@@ -57,16 +58,22 @@ curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh |
 
 Set `H_AGENT_VERSION` to install another Git ref, `H_AGENT_REPOSITORY` to use a
 fork, or `H_AGENT_INSTALL_URL` to download `h-agent` itself from a custom URL.
-`seedProfile`, `setupConfigDir`, and their shared library download as siblings
-of that URL by default (same directory, their own filenames); override them
-individually with `H_AGENT_SEEDPROFILE_URL`, `H_AGENT_SETUPCONFIGDIR_URL`, and
-`H_AGENT_PROFILELIB_URL` if they live elsewhere.
+`seedProfile`, `setupConfigDir`, their shared library, and `h-agent-capture`
+download as siblings of that URL by default (same directory, their own
+filenames); override them individually with `H_AGENT_SEEDPROFILE_URL`,
+`H_AGENT_SETUPCONFIGDIR_URL`, `H_AGENT_PROFILELIB_URL`, and
+`H_AGENT_CAPTURE_URL` if they live elsewhere.
 Set `H_AGENT_INSTALL_CLIS=0` to install only the h-agent scripts, without any
 CLI. When `DESTDIR` is set, the installer stages only those scripts and never
 changes the invoking user's CLI installations or configuration. Set
 `H_AGENT_SEED_CONFIG=0` to leave CLI configuration untouched. Merging defaults
-into existing Claude JSON requires `jq`; without it, existing files are
-preserved and a warning is printed.
+into an existing Claude JSON file uses `jq` when present, otherwise `perl`
+(its `JSON::PP` is a core module, and `perl` ships by default on Ubuntu,
+Debian, and macOS where `jq` does not) — so a full merge needs no extra
+package on a typical base image. If neither is available, only the
+first-run-critical flags (`hasCompletedOnboarding`, `skipDangerousModePermissionPrompt`)
+are injected and other defaults are skipped; existing values are never
+replaced in any case.
 
 System-wide (typically requires elevated permissions):
 
@@ -101,6 +108,8 @@ h-agent agy
 h-agent codex
 h-agent probeProvider http://localhost:8000
 h-agent probeProvider http://localhost:8000 my-model
+h-agent --log                   # print the capture log
+h-agent --log claude            # only claude's entries
 h-agent --help
 ```
 
@@ -118,6 +127,44 @@ any account and home directory:
 - `AGENT_PROVIDER_MODEL`: model exposed by the endpoint
 - `AGENT_PROVIDER_SMALL_MODEL`: optional smaller model
 - `AGENT_PROVIDER_TOKEN`: optional endpoint token
+- `AGENT_CAPTURE`: `1` logs agent hook events (default), `0` disables (Claude only)
+- `AGENT_CAPTURE_FILE`: capture log path (default `~/.local/state/h-agent/commands.jsonl`)
+- `AGENT_NAME`: instance label recorded as `name` in each log entry (e.g. a framework's per-agent name)
+
+### Command capture
+
+For Claude, `h-agent` records what the agent does to a local JSON Lines log,
+one record per hook event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `Stop`, `PreCompact`, `PostCompact`). It is **on by default**;
+set `AGENT_CAPTURE=0` to turn it off.
+
+The hook settings are passed to Claude inline via `--settings` and merged with
+your own settings — no files under `~/.claude` are written. Each record holds
+**commands and metadata only** — the event name, tool name, the Bash command,
+the tool-use and session ids, and the cwd. Prompts and tool output are never
+logged. The log is created mode `600` at `AGENT_CAPTURE_FILE`.
+
+Capture never interferes with the agent: the hook always exits successfully,
+tolerates malformed input and an unwritable log, and needs no `jq`. It parses
+payloads with `perl` (core `JSON::PP`); without `perl` it still records a
+minimal, payload-free line per event. Note that logged commands can contain
+secrets — the log is local and private, but it is plaintext.
+
+To distinguish agents a framework spins up, set `AGENT_NAME` when launching:
+each log entry then carries a `name` field, and the `[agent]` tag becomes
+`[agent:name]`.
+
+```sh
+AGENT_NAME=researcher h-agent claude
+```
+
+Read the log back with `h-agent --log`, which prints one line per event
+(timestamp, agent/name, event, tool, command). Pass a filter to narrow to one
+CLI **or** one `AGENT_NAME`, e.g. `h-agent --log claude` or
+`h-agent --log researcher`. It reads `AGENT_CAPTURE_FILE`, formats with `perl`
+when available, and otherwise prints the raw JSON Lines.
+
+Capture for Codex is not yet wired up; agy is out of scope.
 
 ### Probe a local provider
 

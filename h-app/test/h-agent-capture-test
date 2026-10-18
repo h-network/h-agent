@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cap="$root/h-agent-capture"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+
+# A representative Bash PreToolUse payload. It deliberately includes fields the
+# capture must NOT record: a prompt and a tool_response (output).
+payload='{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/work",'
+payload+='"tool_name":"Bash","tool_use_id":"t1",'
+payload+='"tool_input":{"command":"echo hi"},'
+payload+='"prompt":"SECRET-PROMPT","tool_response":{"stdout":"SECRET-OUTPUT"}}'
+
+# 1. Valid payload: command + metadata captured; prompt/output dropped; exit 0.
+log="$tmp/commands.jsonl"
+printf '%s' "$payload" | AGENT_CAPTURE_FILE="$log" "$cap" claude \
+    || fail 'nonzero exit on valid payload'
+jq -e '.event == "PreToolUse" and .agent == "claude" and .tool_name == "Bash" and
+       .tool_use_id == "t1" and .session_id == "s1" and .cwd == "/work" and
+       .command == "echo hi"' "$log" >/dev/null || fail 'bash metadata not captured'
+grep -Fq 'SECRET-PROMPT' "$log" && fail 'prompt leaked into log'
+grep -Fq 'SECRET-OUTPUT' "$log" && fail 'tool output leaked into log'
+
+# 2. The log is created private (0600).
+mode=$(stat -c '%a' "$log" 2>/dev/null || stat -f '%Lp' "$log" 2>/dev/null)
+[ "$mode" = 600 ] || fail "log mode is $mode, expected 600"
+
+# 3. Appends rather than truncates.
+printf '%s' "$payload" | AGENT_CAPTURE_FILE="$log" "$cap" claude \
+    || fail 'nonzero exit on second event'
+test "$(wc -l <"$log")" -eq 2 || fail 'second event did not append'
+
+# 4. Malformed input: still exit 0 and still a valid JSON line (no event).
+mlog="$tmp/malformed.jsonl"
+printf 'this is not json' | AGENT_CAPTURE_FILE="$mlog" "$cap" claude \
+    || fail 'nonzero exit on malformed input'
+jq -e '.agent == "claude" and .event == null' "$mlog" >/dev/null \
+    || fail 'malformed input did not yield a minimal line'
+
+# 5. Unwritable log location (a file where a directory is expected): exit 0,
+#    no crash. Robust even when the suite runs as root.
+printf 'x' >"$tmp/not-a-dir"
+printf '%s' "$payload" | AGENT_CAPTURE_FILE="$tmp/not-a-dir/sub/commands.jsonl" "$cap" claude \
+    || fail 'nonzero exit when the log directory cannot be created'
+
+# 6. Agent name is sanitized.
+slog="$tmp/sanitized.jsonl"
+printf '%s' "$payload" | AGENT_CAPTURE_FILE="$slog" "$cap" 'cla/ude; rm -rf' \
+    || fail 'nonzero exit on hostile agent name'
+jq -e '.agent | test("^[A-Za-z0-9._-]+$")' "$slog" >/dev/null \
+    || fail 'agent name not sanitized'
+
+# 7. Without perl (forced via H_AGENT_PERL): exit 0, a minimal payload-free line,
+#    and no part of the payload is leaked.
+nlog="$tmp/noperl.jsonl"
+printf '%s' "$payload" | H_AGENT_PERL=perl-not-installed AGENT_CAPTURE_FILE="$nlog" "$cap" claude \
+    || fail 'nonzero exit without perl'
+jq -e '.agent == "claude" and .event == null' "$nlog" >/dev/null \
+    || fail 'no-perl fallback did not yield a minimal line'
+grep -Fq 'echo hi' "$nlog" && fail 'no-perl fallback leaked the command'
+grep -Fq 'SECRET-PROMPT' "$nlog" && fail 'no-perl fallback leaked the prompt'
+
+# 8. AGENT_NAME is recorded as the "name" field (perl path and fallback).
+alog="$tmp/named.jsonl"
+printf '%s' "$payload" | AGENT_NAME=researcher AGENT_CAPTURE_FILE="$alog" "$cap" claude \
+    || fail 'nonzero exit with AGENT_NAME set'
+jq -e '.name == "researcher" and .agent == "claude"' "$alog" >/dev/null \
+    || fail 'AGENT_NAME not recorded'
+nalog="$tmp/named-noperl.jsonl"
+printf '%s' "$payload" | H_AGENT_PERL=perl-not-installed AGENT_NAME=coder \
+    AGENT_CAPTURE_FILE="$nalog" "$cap" claude || fail 'nonzero exit without perl + AGENT_NAME'
+jq -e '.name == "coder"' "$nalog" >/dev/null \
+    || fail 'AGENT_NAME not recorded in no-perl fallback'
+
+printf 'ok - capture behavior\n'
