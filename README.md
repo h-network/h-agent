@@ -13,12 +13,16 @@
 
 # h-agent
 
-`h-agent` launches Claude Code, Agy, or Codex with consistent unattended-mode
-flags. It can also point Claude Code at a local inference endpoint.
+`h-agent` launches Claude Code, Codex, or agy with consistent unattended-mode
+flags. It captures each agent's commands to a local log, forks sessions, tunes
+reasoning effort, and can point Claude Code at a local inference endpoint.
 
 The wrapper is standalone: it does not create a user, change identity, or
 assume a particular username or home path. The selected CLI runs as the caller
 and inherits that caller's `HOME` and configuration files.
+
+> **New here?** The [**Quickstart**](https://github.com/h-network/h-agent/wiki)
+> walks through install → first run → reading the command log.
 
 ## Install
 
@@ -43,7 +47,8 @@ else has been attempted.
 The installer also seeds unattended defaults in the invoking identity's
 `$HOME`: Claude's completed-onboarding state and settings (including a status
 line and a 500k-token auto-compact window for the default Sonnet/Opus models),
-plus Codex's update, approval, and sandbox defaults. Missing values are added, but existing user
+Codex's update/approval/sandbox defaults, and agy's command-capture hooks
+(`~/.gemini/config/hooks.json`). Missing values are added, but existing user
 values are never replaced. Project trust is granted only to the directory from
 which the installer is run. The installer does not create or switch users and
 works the same for root or any provisioned user/UID.
@@ -131,7 +136,7 @@ any account and home directory:
 - `AGENT_PROVIDER_MODEL`: model exposed by the endpoint
 - `AGENT_PROVIDER_SMALL_MODEL`: optional smaller model
 - `AGENT_PROVIDER_TOKEN`: optional endpoint token
-- `AGENT_CAPTURE`: `1` logs agent hook events (default), `0` disables (Claude only)
+- `AGENT_CAPTURE`: `1` logs agent hook events (default), `0` disables (claude, codex, agy)
 - `AGENT_CAPTURE_FILE`: capture log path (default `~/.local/state/h-agent/commands.jsonl`)
 - `AGENT_NAME`: instance label recorded as `name` in each log entry (e.g. a framework's per-agent name)
 
@@ -251,9 +256,10 @@ splitting `HOME` entirely rather than pointing an env var elsewhere.
 
 ```sh
 make test
-shellcheck h-app/h-agent install.sh h-app/seedProfile h-app/setupConfigDir \
-    h-app/h-agent-profile-lib.sh h-app/test/h-agent-test h-app/test/install-test \
-    h-app/test/profile-test
+shellcheck h-app/h-agent h-app/h-agent-capture install.sh h-app/seedProfile \
+    h-app/setupConfigDir h-app/h-agent-profile-lib.sh h-app/test/h-agent-test \
+    h-app/test/h-agent-capture-test h-app/test/install-test \
+    h-app/test/profile-test h-app/test/probe-provider-test
 ```
 
 ## License
