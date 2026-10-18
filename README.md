@@ -133,13 +133,17 @@ any account and home directory:
 
 ### Command capture
 
-For Claude, `h-agent` records what the agent does to a local JSON Lines log,
-one record per hook event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`,
-`PostToolUse`, `Stop`, `PreCompact`, `PostCompact`). It is **on by default**;
-set `AGENT_CAPTURE=0` to turn it off.
+For both Claude and Codex, `h-agent` records what the agent does to a local
+JSON Lines log, one record per hook event. It logs session boundaries and shell
+commands only: `SessionStart`, `SessionEnd`, and `PreToolUse` scoped to `Bash`.
+It is **on by default**; set `AGENT_CAPTURE=0` to turn it off.
 
-The hook settings are passed to Claude inline via `--settings` and merged with
-your own settings — no files under `~/.claude` are written. Each record holds
+The hooks are injected per launch and write no files under `~/.claude` or
+`~/.codex`: for Claude, inline via `--settings` (merged with your own settings);
+for Codex, via `-c` TOML overrides plus `--dangerously-bypass-hook-trust` (Codex
+requires hooks to be trusted, and that cannot be set through `-c` — consistent
+with h-agent already running Codex in bypass mode). Both CLIs deliver the same
+stdin-JSON payload, so one capture script serves both. Each record holds
 **commands and metadata only** — the event name, tool name, the Bash command,
 the tool-use and session ids, and the cwd. Prompts and tool output are never
 logged. The log is created mode `600` at `AGENT_CAPTURE_FILE`.
@@ -159,12 +163,16 @@ AGENT_NAME=researcher h-agent claude
 ```
 
 Read the log back with `h-agent --log`, which prints one line per event
-(timestamp, agent/name, event, tool, command). Pass a filter to narrow to one
-CLI **or** one `AGENT_NAME`, e.g. `h-agent --log claude` or
-`h-agent --log researcher`. It reads `AGENT_CAPTURE_FILE`, formats with `perl`
-when available, and otherwise prints the raw JSON Lines.
+(timestamp, agent/name, short `#session`, event, tool, command). Pass a filter
+to narrow to one CLI, one `AGENT_NAME`, or a session id (whole or a leading
+prefix like the short `#id`), e.g. `h-agent --log claude`,
+`h-agent --log researcher`, or `h-agent --log abcd1234`. It reads
+`AGENT_CAPTURE_FILE`, formats with `perl` when available, and otherwise prints
+the raw JSON Lines.
 
-Capture for Codex is not yet wired up; agy is out of scope.
+Codex hook dispatch has been reported to be unreliable in some front-ends, so
+confirm commands actually appear in the log for your Codex version. agy is out
+of scope (no documented hook support).
 
 ### Probe a local provider
 

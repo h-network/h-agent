@@ -52,12 +52,19 @@ if "$root/h-agent" unknown >/dev/null 2>&1; then
     fail 'unknown CLI was accepted'
 fi
 
-# Capture is on by default for claude: --settings carries exactly the seven
-# hook events, wired to h-agent-capture.
+# Capture is on by default for claude: --settings registers exactly the three
+# events we keep (session boundaries + Bash commands), wired to h-agent-capture,
+# with PreToolUse scoped to Bash. No other events are registered.
 output=$(HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
-for event in SessionStart UserPromptSubmit PreToolUse PostToolUse Stop PreCompact PostCompact; do
+for event in SessionStart SessionEnd PreToolUse; do
     assert_has_sub "$output" "\"$event\""
 done
+for event in UserPromptSubmit PostToolUse Stop PreCompact PostCompact; do
+    if grep -Fq "\"$event\"" <<<"$output"; then
+        fail "capture settings should not register $event"
+    fi
+done
+assert_has_sub "$output" '"matcher":"Bash"'
 assert_has_sub "$output" '"type":"command"'
 assert_has_sub "$output" 'h-agent-capture\" claude'
 # A disabled or non-claude run injects no hook settings.
@@ -65,21 +72,48 @@ output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
 if grep -Fq '"hooks"' <<<"$output"; then
     fail 'capture settings present when AGENT_CAPTURE=0'
 fi
+# codex gets the same three events via -c TOML overrides plus the trust-bypass
+# flag (trust cannot be set through -c).
 output=$(HOME="$tmp/caphome" "$root/h-agent" codex 2>/dev/null)
-if grep -Fq '"hooks"' <<<"$output"; then
-    fail 'capture settings injected for codex'
+assert_has_sub "$output" '--dangerously-bypass-hook-trust'
+assert_has_sub "$output" 'hooks.SessionStart='
+assert_has_sub "$output" 'hooks.SessionEnd='
+assert_has_sub "$output" 'hooks.PreToolUse='
+assert_has_sub "$output" 'matcher="^Bash'
+assert_has_sub "$output" 'h-agent-capture codex'
+for event in UserPromptSubmit PostToolUse Stop; do
+    if grep -Fq "hooks.$event" <<<"$output"; then
+        fail "codex capture should not register $event"
+    fi
+done
+# disabling capture removes the overrides and the flag
+output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" codex 2>/dev/null)
+if grep -Fq 'hooks.PreToolUse' <<<"$output"; then
+    fail 'codex capture present when AGENT_CAPTURE=0'
+fi
+if grep -Fq -- '--dangerously-bypass-hook-trust' <<<"$output"; then
+    fail 'codex trust-bypass present when AGENT_CAPTURE=0'
 fi
 
 # --log prints the capture log, optionally filtered to one agent.
 caplog="$tmp/commands.jsonl"
 cat >"$caplog" <<'EOF'
-{"ts":"2026-10-18T04:00:00Z","agent":"claude","name":"researcher","event":"PreToolUse","tool_name":"Bash","command":"ls -la"}
-{"ts":"2026-10-18T04:00:01Z","agent":"claude","name":"researcher","event":"SessionStart"}
-{"ts":"2026-10-18T04:00:02Z","agent":"codex","name":"coder","event":"PreToolUse","tool_name":"Bash","command":"git status"}
+{"ts":"2026-10-18T04:00:00Z","agent":"claude","name":"researcher","session_id":"aaaa1111-2222","event":"PreToolUse","tool_name":"Bash","command":"ls -la"}
+{"ts":"2026-10-18T04:00:01Z","agent":"claude","name":"researcher","session_id":"aaaa1111-2222","event":"SessionStart"}
+{"ts":"2026-10-18T04:00:02Z","agent":"codex","name":"coder","session_id":"bbbb3333-4444","event":"PreToolUse","tool_name":"Bash","command":"git status"}
 EOF
 output=$(AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log)
 assert_has_sub "$output" 'ls -la'
 assert_has_sub "$output" 'git status'
+# session id is surfaced (short form) so sessions are distinguishable
+assert_has_sub "$output" '#aaaa1111'
+assert_has_sub "$output" '#bbbb3333'
+# filtering by a session id (prefix) narrows to that session only
+output=$(AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log aaaa1111)
+assert_has_sub "$output" 'ls -la'
+if grep -Fq 'git status' <<<"$output"; then
+    fail '--log <session> leaked another session'
+fi
 # filtered to claude: its command shows, codex's does not
 output=$(AGENT_CAPTURE_FILE="$caplog" "$root/h-agent" --log claude)
 assert_has_sub "$output" 'ls -la'

@@ -18,7 +18,7 @@ usage: h-agent [claude|agy|codex] [args...]
   probeProvider
            verify that an endpoint serves Claude's Anthropic protocol
   --log    print the capture log (AGENT_CAPTURE_FILE); optionally filtered
-           to one CLI (claude/codex) or AGENT_NAME instance label
+           to one CLI (claude/codex), AGENT_NAME label, or session id
 
 With no CLI named, starts $AGENT_CLI (default: claude).
 Any further arguments are passed straight to the chosen CLI.
@@ -28,7 +28,8 @@ Environment:
   AGENT_SKIP_PERMISSIONS  1 (default) skips approval prompts; 0 keeps them
   AGENT_CLAUDE_TOOLS      claude's tool list (default:
                           "Bash Read Write Edit Glob Grep"; empty = unrestricted)
-  AGENT_CAPTURE           1 (default) logs agent hook events; 0 disables (claude)
+  AGENT_CAPTURE           1 (default) logs agent hook events; 0 disables
+                          (claude and codex)
   AGENT_CAPTURE_FILE      capture log path
                           (default: ~/.local/state/h-agent/commands.jsonl)
   AGENT_NAME              instance label recorded as "name" in each log entry
@@ -55,15 +56,20 @@ json_escape() {
 }
 
 build_capture_settings() {
-    # Inline Claude settings that register the capture hook on every event we
-    # care about. Built with plain shell (no jq at runtime); merged by Claude
-    # into the user's own settings via --settings, writing no files.
-    local capture=$1 event hooks="" jcmd timeout=5
+    # Inline Claude settings that register the capture hook. Built with plain
+    # shell (no jq at runtime); merged by Claude into the user's own settings
+    # via --settings, writing no files. We log session boundaries and shell
+    # commands only: SessionStart/SessionEnd plus PreToolUse scoped to Bash.
+    local capture=$1 event hooks="" jcmd timeout=5 matcher
     # The hook's "command" is a shell command line; quote the path for spaces.
     jcmd=$(json_escape "\"$capture\" claude")
-    for event in SessionStart UserPromptSubmit PreToolUse PostToolUse Stop PreCompact PostCompact; do
+    for event in SessionStart SessionEnd PreToolUse; do
+        case "$event" in
+            PreToolUse) matcher="Bash" ;;   # shell commands only, not every tool
+            *) matcher="*" ;;
+        esac
         [ -n "$hooks" ] && hooks+=","
-        hooks+="\"$event\":[{\"matcher\":\"*\",\"hooks\":[{\"type\":\"command\",\"command\":\"$jcmd\",\"timeout\":$timeout}]}]"
+        hooks+="\"$event\":[{\"matcher\":\"$matcher\",\"hooks\":[{\"type\":\"command\",\"command\":\"$jcmd\",\"timeout\":$timeout}]}]"
     done
     printf '{"hooks":{%s}}' "$hooks"
 }
@@ -94,13 +100,20 @@ my $want = defined $ARGV[0] ? $ARGV[0] : '';
 while (my $l = <STDIN>) {
     my $d = eval { decode_json($l) };
     next unless ref $d eq 'HASH';
-    # A filter matches either the CLI (agent) or the instance name.
-    next if length $want
-        && (($d->{agent} // '') ne $want)
-        && (($d->{name} // '') ne $want);
+    my $sid = (defined $d->{session_id} && !ref $d->{session_id}) ? $d->{session_id} : '';
+    # A filter matches the CLI (agent), the instance name, or a session id
+    # (whole, or a leading prefix like the short #id shown below).
+    if (length $want) {
+        next unless ($d->{agent} // '') eq $want
+                 || ($d->{name} // '') eq $want
+                 || $sid eq $want
+                 || (length $sid && index($sid, $want) == 0);
+    }
     my $tag = $d->{agent} // '?';
     $tag .= ':' . $d->{name} if defined $d->{name} && length $d->{name} && !ref $d->{name};
-    my @p = ($d->{ts} // '-', "[$tag]", $d->{event} // '-');
+    my @p = ($d->{ts} // '-', "[$tag]");
+    push @p, '#' . substr($sid, 0, 8) if length $sid;
+    push @p, $d->{event} // '-';
     push @p, $d->{tool_name} if defined $d->{tool_name} && !ref $d->{tool_name};
     my $line = join(' ', @p);
     $line .= ': ' . $d->{command} if defined $d->{command} && !ref $d->{command};
@@ -110,8 +123,9 @@ PERL
 )
         "$perl_bin" -e "$perl_src" -- "$agent" <"$log"
     elif [ -n "$agent" ]; then
-        # No perl: substring-match either the CLI or the instance name field.
-        grep -F -e "\"agent\":\"$agent\"" -e "\"name\":\"$agent\"" "$log" || true
+        # No perl: substring-match the CLI, the instance name, or a session id.
+        grep -F -e "\"agent\":\"$agent\"" -e "\"name\":\"$agent\"" \
+            -e "\"session_id\":\"$agent\"" "$log" || true
     else
         cat "$log"
     fi
@@ -291,11 +305,13 @@ fi
 skip="${AGENT_SKIP_PERMISSIONS:-1}"
 tools="${AGENT_CLAUDE_TOOLS-Bash Read Write Edit Glob Grep}"
 
-# Command/event capture (claude only for now; codex hooks are a follow-up).
-# On by default; AGENT_CAPTURE=0 disables it. The capture script lives next to
-# this launcher and logs to AGENT_CAPTURE_FILE.
+# Command/event capture (claude and codex). On by default; AGENT_CAPTURE=0
+# disables it. The capture script lives next to this launcher and logs to
+# AGENT_CAPTURE_FILE. Both CLIs record session boundaries and Bash commands only
+# and pass the same stdin-JSON schema, so one capture script serves both.
 capture_settings=""
-if [ "${AGENT_CAPTURE:-1}" != 0 ] && [ "$cli" = claude ]; then
+capture_codex_args=()
+if [ "${AGENT_CAPTURE:-1}" != 0 ] && { [ "$cli" = claude ] || [ "$cli" = codex ]; }; then
     self=$0
     case "$self" in
         */*) ;;
@@ -307,7 +323,25 @@ if [ "${AGENT_CAPTURE:-1}" != 0 ] && [ "$cli" = claude ]; then
         export AGENT_CAPTURE_FILE="${AGENT_CAPTURE_FILE:-$HOME/.local/state/h-agent/commands.jsonl}"
         # Propagate a caller-supplied instance name to the capture hook.
         [ -n "${AGENT_NAME:-}" ] && export AGENT_NAME
-        capture_settings=$(build_capture_settings "$capture")
+        case "$cli" in
+            claude)
+                capture_settings=$(build_capture_settings "$capture")
+                ;;
+            codex)
+                # Codex 0.163.0 hooks: registered inline via -c TOML overrides
+                # (no ~/.codex/config.toml write). Hook trust cannot be set via
+                # -c, so it is bypassed for this invocation -- consistent with
+                # h-agent already running codex in bypass mode by default. The
+                # payload is JSON on stdin with the same field names claude uses.
+                codex_cmd="$capture codex"
+                capture_codex_args=(
+                    --dangerously-bypass-hook-trust
+                    -c "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"$codex_cmd\"}]}]"
+                    -c "hooks.SessionEnd=[{hooks=[{type=\"command\",command=\"$codex_cmd\"}]}]"
+                    -c "hooks.PreToolUse=[{matcher=\"^Bash\$\",hooks=[{type=\"command\",command=\"$codex_cmd\"}]}]"
+                )
+                ;;
+        esac
     fi
 fi
 
@@ -325,6 +359,7 @@ case "$cli" in
         ;;
     codex)
         [ "$skip" = "1" ] && flags+=(--dangerously-bypass-approvals-and-sandbox)
+        [ "${#capture_codex_args[@]}" -gt 0 ] && flags+=("${capture_codex_args[@]}")
         ;;
 esac
 
