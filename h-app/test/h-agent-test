@@ -94,6 +94,18 @@ output=$(AGENT_EFFORT='' HOME="$tmp/effhome" "$root/h-agent" claude 2>/dev/null)
 if grep -Fqx 'ARG=--effort' <<<"$output"; then
     fail 'empty AGENT_EFFORT still passed --effort'
 fi
+# effort applies to agy (--effort) and codex (-c model_reasoning_effort) too.
+output=$(HOME="$tmp/effhome" "$root/h-agent" agy 2>/dev/null)
+assert_has "$output" 'ARG=--effort'
+assert_has "$output" 'ARG=high'
+output=$(HOME="$tmp/effhome" "$root/h-agent" codex 2>/dev/null)
+assert_has_sub "$output" 'model_reasoning_effort="high"'
+output=$(AGENT_EFFORT=xhigh HOME="$tmp/effhome" "$root/h-agent" codex 2>/dev/null)
+assert_has_sub "$output" 'model_reasoning_effort="xhigh"'
+output=$(AGENT_EFFORT='' HOME="$tmp/effhome" "$root/h-agent" codex 2>/dev/null)
+if grep -Fq 'model_reasoning_effort' <<<"$output"; then
+    fail 'empty AGENT_EFFORT still set codex effort'
+fi
 
 # Capture is on by default for claude: --settings registers exactly the three
 # events we keep (session boundaries + Bash commands), wired to h-agent-capture,
@@ -130,8 +142,8 @@ for event in UserPromptSubmit PostToolUse Stop; do
         fail "codex capture should not register $event"
     fi
 done
-# exactly one -c (combined), not three
-test "$(grep -Fxc 'ARG=-c' <<<"$output")" -eq 1 || fail 'codex capture should use a single -c'
+# the three hook events are combined into a single -c value (not three)
+test "$(grep -Fc 'ARG=hooks={' <<<"$output")" -eq 1 || fail 'codex capture hooks should be one combined -c'
 # disabling capture removes the overrides and the flag
 output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" codex 2>/dev/null)
 if grep -Fq 'hooks=' <<<"$output"; then

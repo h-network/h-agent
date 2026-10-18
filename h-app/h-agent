@@ -40,8 +40,9 @@ Environment:
   AGENT_SKIP_PERMISSIONS  1 (default) skips approval prompts; 0 keeps them
   AGENT_CLAUDE_TOOLS      claude's tool list (default:
                           "Bash Read Write Edit Glob Grep"; empty = unrestricted)
-  AGENT_EFFORT            claude reasoning effort (default: high; empty = model
-                          default). One of low, medium, high, xhigh, max
+  AGENT_EFFORT            reasoning effort for claude, codex and agy (default:
+                          high; empty = each CLI's default). low|medium|high|
+                          xhigh|max (codex also accepts ultra)
   AGENT_CAPTURE           1 (default) logs agent hook events; 0 disables
                           (claude and codex)
   AGENT_CAPTURE_FILE      capture log path
@@ -395,6 +396,12 @@ if [ "${AGENT_CAPTURE:-1}" != 0 ] && { [ "$cli" = claude ] || [ "$cli" = codex ]
     fi
 fi
 
+# Reasoning effort: default high, per-launch override via AGENT_EFFORT (a
+# per-launch flag/override beats any effort set in settings). AGENT_EFFORT=''
+# falls back to each CLI's own default. claude and agy take --effort; codex
+# takes it as a -c config override.
+effort="${AGENT_EFFORT-high}"
+
 flags=()
 case "$cli" in
     claude)
@@ -403,18 +410,16 @@ case "$cli" in
         # shellcheck disable=SC2206
         [ -n "$tools" ] && flags+=(--tools $tools)
         [ -n "$capture_settings" ] && flags+=(--settings "$capture_settings")
-        # Reasoning effort: default high, per-launch override via AGENT_EFFORT
-        # (a per-launch --effort beats any effortLevel in settings). Set
-        # AGENT_EFFORT='' to fall back to the model/settings default.
-        effort="${AGENT_EFFORT-high}"
         [ -n "$effort" ] && flags+=(--effort "$effort")
         ;;
     agy)
         [ "$skip" = "1" ] && flags+=(--dangerously-skip-permissions)
+        [ -n "$effort" ] && flags+=(--effort "$effort")
         ;;
     codex)
         [ "$skip" = "1" ] && flags+=(--dangerously-bypass-approvals-and-sandbox)
         [ "${#capture_codex_args[@]}" -gt 0 ] && flags+=("${capture_codex_args[@]}")
+        [ -n "$effort" ] && flags+=(-c "model_reasoning_effort=\"$effort\"")
         ;;
 esac
 
