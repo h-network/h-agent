@@ -160,4 +160,48 @@ grep -Fq 'CLI install summary:' <<<"$fail_output"
 grep -Fqx '  ok:     claude agy' <<<"$fail_output"
 grep -Fqx '  failed: codex' <<<"$fail_output"
 
+# A machine without jq (the default on Ubuntu, Debian, macOS and minimal
+# containers) must still get the onboarding flag seeded. claude's own installer
+# creates ~/.claude.json first, so seeding always hits the "merge into an
+# existing file" path; without a jq-free fallback the flag was silently dropped
+# and claude showed its interactive first-run screen on every clean install.
+nojq_bin=$tmp/nojq-bin
+mkdir -p "$nojq_bin"
+for d in /usr/bin /bin; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+        [ -e "$f" ] && ln -sf "$f" "$nojq_bin/$(basename -- "$f")"
+    done
+done
+rm -f "$nojq_bin/jq"
+if PATH="$nojq_bin" bash -c 'command -v jq' >/dev/null 2>&1; then
+    echo 'not ok - test could not hide jq from PATH' >&2
+    exit 1
+fi
+
+nojq_home=$tmp/nojq-home
+mkdir -p "$nojq_home"
+# Boilerplate the claude installer leaves behind (login/settings a real user
+# might have); none of it must be lost, and no hasCompletedOnboarding yet.
+cat >"$nojq_home/.claude.json" <<'EOF'
+{
+  "installMethod": "native",
+  "autoUpdates": false,
+  "machineID": "keep-me",
+  "oauthAccount": {"keep": true}
+}
+EOF
+PATH="$tmp/bin:$nojq_bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+    H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
+# Validate with the outer shell's jq: flag added, existing keys preserved,
+# file still valid JSON (no clobbered login/settings).
+jq -e '.hasCompletedOnboarding == true and .autoUpdates == false and
+       .installMethod == "native" and .machineID == "keep-me" and
+       .oauthAccount.keep == true' "$nojq_home/.claude.json" >/dev/null
+# Idempotent: a second no-jq run must not add the flag twice or corrupt it.
+PATH="$tmp/bin:$nojq_bin" HOME="$nojq_home" H_AGENT_INSTALL_CLIS=0 \
+    H_AGENT_INSTALL_URL=https://example.invalid/h-agent "$root/install.sh" >/dev/null
+test "$(grep -Fc '"hasCompletedOnboarding"' "$nojq_home/.claude.json")" -eq 1
+jq -e '.hasCompletedOnboarding == true' "$nojq_home/.claude.json" >/dev/null
+
 echo 'ok - installer behavior'

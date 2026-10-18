@@ -154,22 +154,40 @@ print_path_instruction() {
 seed_claude_state() {
     local target=$HOME/.claude.json tmp escaped_pwd
     if [ -s "$target" ]; then
-        if ! command -v jq >/dev/null 2>&1; then
-            echo "warning: preserving existing $target; install jq to merge h-agent defaults" >&2
+        if command -v jq >/dev/null 2>&1; then
+            tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
+            if ! jq --arg cwd "$PWD" \
+                '{hasCompletedOnboarding: true,
+                  projects: {($cwd): {
+                    hasTrustDialogAccepted: true,
+                    hasCompletedProjectOnboarding: true
+                  }}} * .' "$target" >"$tmp"; then
+                rm -f "$tmp"
+                echo "error: existing $target is not valid JSON; leaving it unchanged" >&2
+                exit 1
+            fi
+            mv "$tmp" "$target"
             return
         fi
-        tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
-        if ! jq --arg cwd "$PWD" \
-            '{hasCompletedOnboarding: true,
-              projects: {($cwd): {
-                hasTrustDialogAccepted: true,
-                hasCompletedProjectOnboarding: true
-              }}} * .' "$target" >"$tmp"; then
-            rm -f "$tmp"
-            echo "error: existing $target is not valid JSON; leaving it unchanged" >&2
-            exit 1
+        # No jq. claude's own installer already created this file, so the
+        # fresh-write path below never runs on a real install -- and jq is not
+        # installed by default on Ubuntu, Debian, macOS or minimal containers.
+        # Without the onboarding flag claude shows its interactive first-run
+        # screen, so seed just that flag with plain shell, leaving everything
+        # else (login, settings, trusted projects) untouched. claude writes a
+        # well-formed object, so inject the key after the first '{'. The
+        # per-project trust block is left to the jq / fresh-write paths;
+        # --dangerously-skip-permissions already covers the trust dialog.
+        if ! grep -q '"hasCompletedOnboarding"' "$target"; then
+            tmp=$(mktemp "$HOME/.claude.json.tmp.XXXXXXXX")
+            if awk '!seeded && /{/ { sub(/{/, "{\n  \"hasCompletedOnboarding\": true,"); seeded=1 } { print }' \
+                "$target" >"$tmp" && [ -s "$tmp" ]; then
+                mv "$tmp" "$target"
+            else
+                rm -f "$tmp"
+                echo "warning: could not seed hasCompletedOnboarding into $target" >&2
+            fi
         fi
-        mv "$tmp" "$target"
         return
     fi
     escaped_pwd=${PWD//\\/\\\\}
