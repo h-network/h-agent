@@ -13,6 +13,7 @@ printf 'HOME=%s\n' "$HOME"
 printf 'BASE=%s\n' "${ANTHROPIC_BASE_URL-}"
 printf 'OPUS=%s\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL-}"
 printf 'HAIKU=%s\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL-}"
+printf 'MCPTOK=%s\n' "${HAGENT_MCP_TOKEN_hb-}"
 printf 'ARG=%s\n' "$@"
 EOF
     chmod +x "$tmp/$name"
@@ -205,6 +206,51 @@ fi
 if AGENT_CAPTURE_FILE="$tmp/absent.jsonl" "$root/h-agent" --log >/dev/null 2>&1; then
     fail '--log succeeded with no log file'
 fi
+
+# <cli> mcp ...: forwarded to the CLI's own mcp command, no launch flags.
+for cli in claude codex agy; do
+    output=$("$root/h-agent" "$cli" mcp add srv -- cmd arg)
+    assert_has "$output" 'ARG=mcp'
+    assert_has "$output" 'ARG=add'
+    assert_has "$output" 'ARG=cmd'
+    if grep -Eq -- '--dangerously|--tools|--settings|--effort' <<<"$output"; then
+        fail "mcp on $cli got launch flags"
+    fi
+done
+
+# MCP registry: add/list/remove, then injection into each CLI at launch.
+export AGENT_MCP_FILE="$tmp/mcp.json"
+printf 's3cret\n' >"$tmp/tok"
+"$root/h-agent" mcp add hb --url https://mcp.example/mcp --token-file "$tmp/tok" >/dev/null
+"$root/h-agent" mcp add fs --env K=a=b -- npx -y srv >/dev/null
+output=$("$root/h-agent" mcp list)
+assert_has_sub "$output" 'hb	http https://mcp.example/mcp'
+assert_has_sub "$output" 'fs	stdio npx -y srv'
+[ "$(stat -c %a "$AGENT_MCP_FILE")" = 600 ] || fail 'registry not mode 600'
+if grep -Fq s3cret "$AGENT_MCP_FILE"; then fail 'token stored in registry'; fi
+if "$root/h-agent" mcp add 'bad name' --url x >/dev/null 2>&1; then fail 'bad name accepted'; fi
+if "$root/h-agent" mcp add x --url u -- cmd >/dev/null 2>&1; then fail 'url and cmd both accepted'; fi
+
+output=$("$root/h-agent" claude)
+if grep -F 'ARG=' <<<"$output" | grep -Fq s3cret; then fail 'token leaked into claude argv'; fi
+cfg=$(grep -F 'ARG={"mcpServers"' <<<"$output" | sed 's/^ARG=//')
+jq -e '.mcpServers.hb.type == "http" and
+       .mcpServers.hb.headers.Authorization == "Bearer ${HAGENT_MCP_TOKEN_hb}" and
+       .mcpServers.fs.command == "npx" and .mcpServers.fs.env.K == "a=b"' <<<"$cfg" >/dev/null \
+    || fail 'claude mcp config wrong'
+assert_has "$output" 'MCPTOK=s3cret'
+
+output=$("$root/h-agent" codex)
+if grep -F 'ARG=' <<<"$output" | grep -Fq s3cret; then fail 'token leaked into codex argv'; fi
+assert_has_sub "$output" 'ARG=mcp_servers.hb={url="https://mcp.example/mcp",bearer_token_env_var="HAGENT_MCP_TOKEN_hb"}'
+assert_has_sub "$output" 'ARG=mcp_servers.fs={command="npx",args=["-y","srv"],env={"K"="a=b"}}'
+
+output=$(AGENT_MCP=0 "$root/h-agent" claude)
+if grep -Fq mcpServers <<<"$output"; then fail 'AGENT_MCP=0 still injected'; fi
+
+"$root/h-agent" mcp remove hb >/dev/null
+if "$root/h-agent" mcp list | grep -Fq hb; then fail 'remove did not remove'; fi
+unset AGENT_MCP_FILE
 
 # --help shows the banner.
 assert_has_sub "$("$root/h-agent" --help 2>&1)" 'h-network/h-agent'

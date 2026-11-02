@@ -114,6 +114,10 @@ h-agent codex
 h-agent fork                    # fork your most recent claude session
 h-agent fork <session-id>       # fork a specific session (original untouched)
 h-agent fork codex [<id>]       # same for codex (fork subcommand; unverified)
+h-agent mcp add NAME --url URL --token-file FILE   # register an MCP server once
+h-agent mcp add NAME -- cmd args                   # ...or a stdio server
+h-agent mcp list                                   # also: remove
+h-agent codex mcp list          # a CLI's own mcp command
 h-agent probeProvider http://localhost:8000
 h-agent probeProvider http://localhost:8000 my-model
 h-agent --log                   # print the capture log

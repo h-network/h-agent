@@ -273,7 +273,6 @@ seed_claude_settings() {
   "disableBundledSkills": true,
   "enableAllProjectMcpServers": false,
   "attribution": {"commit": "", "pr": "", "sessionUrl": false},
-  "permissions": {"deny": ["mcp__*"]},
   "env": {
     "DISABLE_TELEMETRY": "1",
     "DISABLE_ERROR_REPORTING": "1",
@@ -307,7 +306,6 @@ EOF
              disableBundledSkills: true,
              enableAllProjectMcpServers: false,
              attribution: {commit: "", pr: "", sessionUrl: false},
-             permissions: {deny: ["mcp__*"]},
              env: {
                DISABLE_TELEMETRY: "1",
                DISABLE_ERROR_REPORTING: "1",
