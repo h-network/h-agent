@@ -83,6 +83,7 @@ jq -e '
     .outputStyle == "Concise" and
     .statusLine.type == "command" and
     .statusLine.command == "~/.claude/statusline.pl" and
+    .idleCompaction == false and
     .modelSettings["claude-sonnet-5-5"].autoCompactWindow == 500000 and
     .modelSettings["claude-opus-4-8"].autoCompactWindow == 500000 and
     .env.DISABLE_TELEMETRY == "1" and

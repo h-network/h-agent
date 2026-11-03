@@ -272,6 +272,7 @@ seed_claude_settings() {
   },
   "disableBundledSkills": true,
   "enableAllProjectMcpServers": false,
+  "idleCompaction": false,
   "attribution": {"commit": "", "pr": "", "sessionUrl": false},
   "env": {
     "DISABLE_TELEMETRY": "1",
@@ -305,6 +306,7 @@ EOF
                              "claude-opus-4-8": {autoCompactWindow: 500000}},
              disableBundledSkills: true,
              enableAllProjectMcpServers: false,
+             idleCompaction: false,
              attribution: {commit: "", pr: "", sessionUrl: false},
              env: {
                DISABLE_TELEMETRY: "1",
