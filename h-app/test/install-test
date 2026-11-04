@@ -86,6 +86,7 @@ jq -e '
     .idleCompaction == false and
     .modelSettings["claude-sonnet-5-5"].autoCompactWindow == 500000 and
     .modelSettings["claude-opus-4-8"].autoCompactWindow == 500000 and
+    .env.DISABLE_AUTOUPDATER == "1" and
     .env.DISABLE_TELEMETRY == "1" and
     (.permissions.deny // []) == []
 ' "$tmp/home/.claude/settings.json" >/dev/null

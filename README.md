@@ -32,7 +32,7 @@ Install for the current user with one command:
 curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh | bash
 ```
 
-This installs `h-agent` plus Claude Code `2.1.302`, Codex CLI `0.163.0`, and the
+This installs `h-agent` plus Claude Code `2.1.311`, Codex CLI `0.166.0`, and the
 latest agy available from its official installer. Claude Code and Codex CLI are
 left untouched when the exact versions are already installed. Installation does
 not require `sudo`.

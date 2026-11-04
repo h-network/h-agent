@@ -6,8 +6,8 @@ repo=${H_AGENT_REPOSITORY:-h-network/h-agent}
 version=${H_AGENT_VERSION:-main}
 url=${H_AGENT_INSTALL_URL:-https://raw.githubusercontent.com/$repo/$version/h-app/h-agent}
 destdir=${DESTDIR:-}
-claude_version=${CLAUDE_VERSION:-2.1.302}
-codex_version=${CODEX_VERSION:-0.163.0}
+claude_version=${CLAUDE_VERSION:-2.1.311}
+codex_version=${CODEX_VERSION:-0.166.0}
 # Merging h-agent's defaults into a pre-existing config file needs a JSON
 # parser. We try jq first, then perl (its JSON::PP is a core module, and perl
 # ships by default on Ubuntu/Debian/macOS where jq does not), then fall back to
@@ -275,6 +275,7 @@ seed_claude_settings() {
   "idleCompaction": false,
   "attribution": {"commit": "", "pr": "", "sessionUrl": false},
   "env": {
+    "DISABLE_AUTOUPDATER": "1",
     "DISABLE_TELEMETRY": "1",
     "DISABLE_ERROR_REPORTING": "1",
     "DISABLE_FEEDBACK_COMMAND": "1",
@@ -309,6 +310,7 @@ EOF
              idleCompaction: false,
              attribution: {commit: "", pr: "", sessionUrl: false},
              env: {
+               DISABLE_AUTOUPDATER: "1",
                DISABLE_TELEMETRY: "1",
                DISABLE_ERROR_REPORTING: "1",
                DISABLE_FEEDBACK_COMMAND: "1",
