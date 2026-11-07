@@ -32,7 +32,7 @@ Install for the current user with one command:
 curl -fsSL https://raw.githubusercontent.com/h-network/h-agent/main/install.sh | bash
 ```
 
-This installs `h-agent` plus Claude Code `2.1.302`, Codex CLI `0.163.0`, and the
+This installs `h-agent` plus Claude Code `2.1.311`, Codex CLI `0.166.0`, and the
 latest agy available from its official installer. Claude Code and Codex CLI are
 left untouched when the exact versions are already installed. Installation does
 not require `sudo`.
@@ -114,6 +114,10 @@ h-agent codex
 h-agent fork                    # fork your most recent claude session
 h-agent fork <session-id>       # fork a specific session (original untouched)
 h-agent fork codex [<id>]       # same for codex (fork subcommand; unverified)
+h-agent mcp add NAME --url URL --token-file FILE   # register an MCP server once
+h-agent mcp add NAME -- cmd args                   # ...or a stdio server
+h-agent mcp list                                   # also: remove
+h-agent codex mcp list          # a CLI's own mcp command
 h-agent probeProvider http://localhost:8000
 h-agent probeProvider http://localhost:8000 my-model
 h-agent --log                   # print the capture log
@@ -131,6 +135,7 @@ any account and home directory:
 - `AGENT_CLI`: default CLI (`claude`)
 - `AGENT_SKIP_PERMISSIONS`: `1` to add unattended-mode flags (default), `0` not to
 - `AGENT_CLAUDE_TOOLS`: space-separated Claude tool list; empty means unrestricted
+- `AGENT_IDLE_COMPACTION`: `0` (default) turns claude's idle compaction off for the launch, `1` leaves it on; passed via `--settings`, so it beats `settings.json`
 - `AGENT_EFFORT`: reasoning effort for claude, codex, and agy (default `high`; empty uses each CLI's default) — `low`/`medium`/`high`/`xhigh`/`max` (codex also accepts `ultra`). claude/agy take `--effort`; codex takes a `-c model_reasoning_effort` override
 - `AGENT_PROVIDER_URL`: local endpoint URL (Claude only)
 - `AGENT_PROVIDER_MODEL`: model exposed by the endpoint

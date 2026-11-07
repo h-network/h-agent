@@ -18,6 +18,8 @@ usage() {
 
 usage: h-agent [claude|agy|codex] [args...]
        h-agent fork [claude|codex] [session-id]
+       h-agent mcp <add|list|remove> ...      (h-agent's MCP registry)
+       h-agent [claude|agy|codex] mcp ...     (that CLI's own mcp command)
        h-agent probeProvider <url> [model-id]
        h-agent --log [agent-name]
 
@@ -27,6 +29,8 @@ usage: h-agent [claude|agy|codex] [args...]
   codex    --dangerously-bypass-approvals-and-sandbox
   fork     fork a session into a new one, leaving the original untouched;
            with a session id forks that one, otherwise the most recent
+  mcp      register MCP servers once; every launch injects them into
+           claude, codex and agy (see 'h-agent mcp --help')
   probeProvider
            verify that an endpoint serves Claude's Anthropic protocol
   --log    print the capture log (AGENT_CAPTURE_FILE); optionally filtered
@@ -43,10 +47,13 @@ Environment:
   AGENT_EFFORT            reasoning effort for claude, codex and agy (default:
                           high; empty = each CLI's default). low|medium|high|
                           xhigh|max (codex also accepts ultra)
+  AGENT_IDLE_COMPACTION   0 (default) turns claude's idle compaction off; 1 on
   AGENT_CAPTURE           1 (default) logs agent hook events; 0 disables
                           (claude and codex)
   AGENT_CAPTURE_FILE      capture log path
                           (default: ~/.local/state/h-agent/commands.jsonl)
+  AGENT_MCP               1 (default) injects registered MCP servers; 0 skips
+  AGENT_MCP_FILE          registry path (default: ~/.config/h-agent/mcp.json)
   AGENT_NAME              instance label recorded as "name" in each log entry
                           (for distinguishing agents spun up by a framework)
 
@@ -254,9 +261,201 @@ probe_provider() {
     return 1
 }
 
+mcp_usage() {
+    cat <<'USAGE'
+usage: h-agent mcp add NAME --url URL [--token-file FILE | --token-env VAR]
+       h-agent mcp add NAME [--env KEY=VALUE]... -- CMD [ARGS...]
+       h-agent mcp list
+       h-agent mcp remove NAME
+       h-agent <claude|codex|agy> mcp ...   (that CLI's own mcp command)
+
+Registers an MCP server with h-agent (AGENT_MCP_FILE, default
+~/.config/h-agent/mcp.json). Every launch injects the registered servers into
+claude, codex and agy; tokens are read from --token-file/--token-env at launch,
+not stored. AGENT_MCP=0 launches without them. Requires jq.
+USAGE
+}
+
+mcp_file() {
+    printf '%s' "${AGENT_MCP_FILE:-$HOME/.config/h-agent/mcp.json}"
+}
+
+mcp_token_var() {
+    local n=${1//-/_}
+    printf 'HAGENT_MCP_TOKEN_%s' "$n"
+}
+
+mcp_json_array() {
+    # Arguments as a JSON array of strings (safe for values starting with '-').
+    if [ "$#" -eq 0 ]; then echo '[]'; return; fi
+    printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1]'
+}
+
+mcp_registry() {
+    # h-agent mcp add|list|remove ...
+    local sub=${1:-} file tmp
+    case "$sub" in
+        ""|-h|--help|help) mcp_usage; [ -n "$sub" ]; return $? ;;
+    esac
+    shift
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "error: h-agent mcp requires jq" >&2
+        return 1
+    fi
+    file=$(mcp_file)
+    case "$sub" in
+        list)
+            [ -s "$file" ] || { echo "no MCP servers registered ($file)"; return 0; }
+            jq -r 'to_entries[] | "\(.key)\t" +
+                (if .value.url then "http \(.value.url)" else "stdio \(([.value.command] + (.value.args // [])) | join(" "))" end) +
+                (if .value.token_file then "\ttoken-file=\(.value.token_file)" else "" end) +
+                (if .value.token_env then "\ttoken-env=\(.value.token_env)" else "" end) +
+                ""' "$file"
+            ;;
+        remove)
+            if [ "$#" -ne 1 ]; then mcp_usage >&2; return 2; fi
+            if [ ! -s "$file" ] || ! jq -e --arg n "$1" 'has($n)' "$file" >/dev/null 2>&1; then
+                echo "error: no MCP server named '$1'" >&2
+                return 1
+            fi
+            tmp=$(mktemp "$file.XXXXXXXX") || return 1
+            jq --arg n "$1" 'del(.[$n])' "$file" >"$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+            echo "removed $1"
+            ;;
+        add)
+            local name=${1:-} url="" token_file="" token_env="" command_seen=0
+            local -a cmd=() envs=()
+            [ "$#" -gt 0 ] && shift
+            case "$name" in
+                ""|*[!a-zA-Z0-9_-]*) echo "error: server name must be alphanumeric, '_' or '-' (got '$name')" >&2; return 2 ;;
+            esac
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    --url) url=${2:-}; shift 2 || { mcp_usage >&2; return 2; } ;;
+                    --token-file) token_file=${2:-}; shift 2 || { mcp_usage >&2; return 2; } ;;
+                    --token-env) token_env=${2:-}; shift 2 || { mcp_usage >&2; return 2; } ;;
+                    --env) envs+=("${2:-}"); shift 2 || { mcp_usage >&2; return 2; } ;;
+                    --) shift; cmd=("$@"); command_seen=1; break ;;
+                    *) echo "error: unexpected argument '$1'" >&2; mcp_usage >&2; return 2 ;;
+                esac
+            done
+            if [ -n "$url" ] && [ "$command_seen" = 1 ]; then
+                echo "error: give either --url or -- CMD, not both" >&2; return 2
+            fi
+            if [ -z "$url" ] && { [ "$command_seen" = 0 ] || [ "${#cmd[@]}" -eq 0 ]; }; then
+                echo "error: need --url URL or -- CMD [ARGS...]" >&2; return 2
+            fi
+            if [ -n "$token_file" ] && [ -n "$token_env" ]; then
+                echo "error: give --token-file or --token-env, not both" >&2; return 2
+            fi
+            if [ -z "$url" ] && { [ -n "$token_file" ] || [ -n "$token_env" ]; }; then
+                echo "error: tokens apply to --url servers; use --env for stdio servers" >&2; return 2
+            fi
+            local e entry
+            for e in ${envs[@]+"${envs[@]}"}; do
+                case "$e" in
+                    [A-Za-z_]*=*) ;;
+                    *) echo "error: --env expects KEY=VALUE (got '$e')" >&2; return 2 ;;
+                esac
+            done
+            entry=$(jq -n --arg url "$url" --arg tf "$token_file" --arg te "$token_env" \
+                --argjson cmd "$(mcp_json_array ${cmd[@]+"${cmd[@]}"})" \
+                --argjson env "$(mcp_json_array ${envs[@]+"${envs[@]}"} | jq -c 'map(split("=") | {(.[0]): (.[1:] | join("="))}) | add // {}')" \
+                '
+                (if $url != "" then {url: $url} else {command: $cmd[0], args: $cmd[1:]} end)
+                + (if $tf != "" then {token_file: $tf} else {} end)
+                + (if $te != "" then {token_env: $te} else {} end)
+                + (if ($env | length) > 0 then {env: $env} else {} end)
+                ') || return 1
+            mkdir -p "$(dirname -- "$file")" || return 1
+            [ -s "$file" ] || echo '{}' >"$file"
+            tmp=$(mktemp "$file.XXXXXXXX") || return 1
+            jq --arg n "$name" --argjson e "$entry" '.[$n] = $e' "$file" >"$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+            echo "registered $name ($file)"
+            ;;
+        *)
+            echo "error: unknown mcp command '$sub'" >&2
+            mcp_usage >&2
+            return 2
+            ;;
+    esac
+}
+
+# Fills mcp_claude_flags / mcp_codex_flags for the registered servers, or
+# (agy, which has no per-launch override) writes them with `agy mcp add`.
+# Tokens are exported as env vars and referenced by name where the CLI allows
+# it, so no secret lands in argv or in claude's/codex's config.
+apply_mcp() {
+    local cli=$1 file name entry url tf te tok var tokvar_ref
+    local claude_servers='{}' server
+    file=$(mcp_file)
+    [ "${AGENT_MCP:-1}" != 0 ] && [ -s "$file" ] || return 0
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "h-agent: jq not found, skipping registered MCP servers" >&2
+        return 0
+    fi
+    while IFS= read -r name; do
+        entry=$(jq -c --arg n "$name" '.[$n]' "$file")
+        url=$(jq -r '.url // empty' <<<"$entry")
+        tf=$(jq -r '.token_file // empty' <<<"$entry")
+        te=$(jq -r '.token_env // empty' <<<"$entry")
+        tok=""
+        var=$(mcp_token_var "$name")
+        if [ -n "$tf" ]; then
+            tf=${tf/#\~/$HOME}
+            if [ -r "$tf" ]; then tok=$(tr -d '\r\n' <"$tf"); fi
+        elif [ -n "$te" ]; then
+            tok=${!te:-}
+        fi
+        if [ -n "$url" ] && { [ -n "$tf" ] || [ -n "$te" ]; } && [ -z "$tok" ]; then
+            echo "h-agent: MCP server '$name': token is empty or unreadable, skipping" >&2
+            continue
+        fi
+        [ -n "$tok" ] && export "$var=$tok"
+        case "$cli" in
+            claude)
+                server=$(jq -c --arg var "$var" --argjson hastok "$([ -n "$tok" ] && echo true || echo false)" '
+                    if .url then {type: "http", url: .url}
+                        + (if $hastok then {headers: {Authorization: ("Bearer ${" + $var + "}")}} else {} end)
+                    else {command: .command, args: (.args // [])} + (if .env then {env: .env} else {} end) end' <<<"$entry")
+                claude_servers=$(jq -c --arg n "$name" --argjson s "$server" '.[$n] = $s' <<<"$claude_servers")
+                ;;
+            codex)
+                mcp_codex_flags+=(-c "mcp_servers.$name=$(jq -r --arg var "$var" --argjson hastok "$([ -n "$tok" ] && echo true || echo false)" '
+                    def q: @json;
+                    if .url then "{url=\(.url | q)" + (if $hastok then ",bearer_token_env_var=\($var | q)" else "" end) + "}"
+                    else "{command=\(.command | q),args=[\((.args // []) | map(q) | join(","))]"
+                        + (if .env then ",env={\(.env | to_entries | map("\(.key | q)=\(.value | q)") | join(","))}" else "" end) + "}" end' <<<"$entry")")
+                ;;
+            agy)
+                local -a add=(agy mcp add)
+                if [ -n "$url" ]; then
+                    [ -n "$tok" ] && add+=(--header "Authorization: Bearer $tok")
+                    add+=("$name" "$url")
+                else
+                    # agy wants flags first, then the name, then the command.
+                    while IFS= read -r t; do add+=(-e "$t"); done < <(jq -r '.env // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$entry")
+                    add+=("$name" --)
+                    while IFS= read -r t; do add+=("$t"); done < <(jq -r '[.command] + (.args // []) | .[]' <<<"$entry")
+                fi
+                "${add[@]}" >/dev/null 2>&1 || echo "h-agent: could not register MCP server '$name' with agy" >&2
+                ;;
+        esac
+    done < <(jq -r 'keys[]' "$file")
+    [ "$cli" = claude ] && [ "$claude_servers" != '{}' ] &&
+        mcp_claude_flags+=(--mcp-config "$(jq -c '{mcpServers: .}' <<<"$claude_servers")")
+    return 0
+}
+
 if [ "${1:-}" = probeProvider ] || [ "${1:-}" = probe-provider ]; then
     shift
     probe_provider "$@"
+    exit $?
+fi
+
+if [ "${1:-}" = mcp ]; then
+    shift
+    mcp_registry "$@"
     exit $?
 fi
 
@@ -305,7 +504,7 @@ else
     case "${1:-}" in
         claude|agy|codex) cli="$1"; shift ;;
         -h|--help|help) usage; exit 0 ;;
-        "") ;;
+        mcp|"") ;;
         -*) ;;
         *)
             echo "error: unknown agent CLI '$1' (expected claude, agy or codex)" >&2
@@ -318,6 +517,13 @@ fi
 if ! command -v "$cli" >/dev/null 2>&1; then
     echo "error: '$cli' is not installed or is not on PATH" >&2
     exit 127
+fi
+
+if [ "${1:-}" = mcp ]; then
+    # `h-agent <cli> mcp ...`: the CLI's own mcp command (claude, codex and agy
+    # all have one). Plain `h-agent mcp ...` manages h-agent's registry above.
+    # Launch flags (bypass, --tools, hooks) belong to sessions, not this.
+    exec "$cli" "$@"
 fi
 
 if [ -n "${AGENT_PROVIDER_URL:-}" ]; then
@@ -396,6 +602,10 @@ if [ "${AGENT_CAPTURE:-1}" != 0 ] && { [ "$cli" = claude ] || [ "$cli" = codex ]
     fi
 fi
 
+mcp_claude_flags=()
+mcp_codex_flags=()
+apply_mcp "$cli"
+
 # Reasoning effort: default high, per-launch override via AGENT_EFFORT (a
 # per-launch flag/override beats any effort set in settings). AGENT_EFFORT=''
 # falls back to each CLI's own default. claude and agy take --effort; codex
@@ -409,8 +619,19 @@ case "$cli" in
         # Shell splitting is intentional: each tool is a separate argument.
         # shellcheck disable=SC2206
         [ -n "$tools" ] && flags+=(--tools $tools)
-        [ -n "$capture_settings" ] && flags+=(--settings "$capture_settings")
+        # Idle compaction: off by default, AGENT_IDLE_COMPACTION=1 turns it on.
+        # Passed per launch via --settings (beats settings.json), merged into
+        # the capture settings so claude gets a single --settings argument.
+        idle_json=false
+        [ "${AGENT_IDLE_COMPACTION:-0}" = "1" ] && idle_json=true
+        if [ -n "$capture_settings" ]; then
+            claude_settings="${capture_settings%\}},\"idleCompaction\":$idle_json}"
+        else
+            claude_settings="{\"idleCompaction\":$idle_json}"
+        fi
+        flags+=(--settings "$claude_settings")
         [ -n "$effort" ] && flags+=(--effort "$effort")
+        [ "${#mcp_claude_flags[@]}" -gt 0 ] && flags+=("${mcp_claude_flags[@]}")
         ;;
     agy)
         [ "$skip" = "1" ] && flags+=(--dangerously-skip-permissions)
@@ -420,6 +641,7 @@ case "$cli" in
         [ "$skip" = "1" ] && flags+=(--dangerously-bypass-approvals-and-sandbox)
         [ "${#capture_codex_args[@]}" -gt 0 ] && flags+=("${capture_codex_args[@]}")
         [ -n "$effort" ] && flags+=(-c "model_reasoning_effort=\"$effort\"")
+        [ "${#mcp_codex_flags[@]}" -gt 0 ] && flags+=("${mcp_codex_flags[@]}")
         ;;
 esac
 
