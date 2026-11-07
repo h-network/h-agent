@@ -319,7 +319,10 @@ mcp_registry() {
                 return 1
             fi
             tmp=$(mktemp "$file.XXXXXXXX") || return 1
-            jq --arg n "$1" 'del(.[$n])' "$file" >"$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+            if ! { jq --arg n "$1" 'del(.[$n])' "$file" >"$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file"; }; then
+                rm -f "$tmp"
+                return 1
+            fi
             echo "removed $1"
             ;;
         add)
@@ -370,7 +373,10 @@ mcp_registry() {
             mkdir -p "$(dirname -- "$file")" || return 1
             [ -s "$file" ] || echo '{}' >"$file"
             tmp=$(mktemp "$file.XXXXXXXX") || return 1
-            jq --arg n "$name" --argjson e "$entry" '.[$n] = $e' "$file" >"$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+            if ! { jq --arg n "$name" --argjson e "$entry" '.[$n] = $e' "$file" >"$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file"; }; then
+                rm -f "$tmp"
+                return 1
+            fi
             echo "registered $name ($file)"
             ;;
         *)
@@ -386,7 +392,7 @@ mcp_registry() {
 # Tokens are exported as env vars and referenced by name where the CLI allows
 # it, so no secret lands in argv or in claude's/codex's config.
 apply_mcp() {
-    local cli=$1 file name entry url tf te tok var tokvar_ref
+    local cli=$1 file name entry url tf te tok var
     local claude_servers='{}' server
     file=$(mcp_file)
     [ "${AGENT_MCP:-1}" != 0 ] && [ -s "$file" ] || return 0
