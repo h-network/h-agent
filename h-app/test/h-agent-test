@@ -128,6 +128,16 @@ output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
 if grep -Fq '"hooks"' <<<"$output"; then
     fail 'capture settings present when AGENT_CAPTURE=0'
 fi
+# Idle compaction is off by default, on with AGENT_IDLE_COMPACTION=1, and
+# shares the single --settings argument with the capture hooks.
+output=$(HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
+assert_has_sub "$output" '"idleCompaction":false}'
+test "$(grep -Fc 'ARG=--settings' <<<"$output")" -eq 1 || fail 'claude got more than one --settings'
+output=$(AGENT_IDLE_COMPACTION=1 HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
+assert_has_sub "$output" '"idleCompaction":true}'
+assert_has_sub "$output" '"hooks"'
+output=$(AGENT_CAPTURE=0 HOME="$tmp/caphome" "$root/h-agent" claude 2>/dev/null)
+assert_has_sub "$output" '{"idleCompaction":false}'
 # codex gets the same three events, but as ONE -c hooks table, plus the
 # trust-bypass flag (trust cannot be set through -c).
 output=$(HOME="$tmp/caphome" "$root/h-agent" codex 2>/dev/null)

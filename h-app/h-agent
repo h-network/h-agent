@@ -47,6 +47,7 @@ Environment:
   AGENT_EFFORT            reasoning effort for claude, codex and agy (default:
                           high; empty = each CLI's default). low|medium|high|
                           xhigh|max (codex also accepts ultra)
+  AGENT_IDLE_COMPACTION   0 (default) turns claude's idle compaction off; 1 on
   AGENT_CAPTURE           1 (default) logs agent hook events; 0 disables
                           (claude and codex)
   AGENT_CAPTURE_FILE      capture log path
@@ -618,7 +619,17 @@ case "$cli" in
         # Shell splitting is intentional: each tool is a separate argument.
         # shellcheck disable=SC2206
         [ -n "$tools" ] && flags+=(--tools $tools)
-        [ -n "$capture_settings" ] && flags+=(--settings "$capture_settings")
+        # Idle compaction: off by default, AGENT_IDLE_COMPACTION=1 turns it on.
+        # Passed per launch via --settings (beats settings.json), merged into
+        # the capture settings so claude gets a single --settings argument.
+        idle_json=false
+        [ "${AGENT_IDLE_COMPACTION:-0}" = "1" ] && idle_json=true
+        if [ -n "$capture_settings" ]; then
+            claude_settings="${capture_settings%\}},\"idleCompaction\":$idle_json}"
+        else
+            claude_settings="{\"idleCompaction\":$idle_json}"
+        fi
+        flags+=(--settings "$claude_settings")
         [ -n "$effort" ] && flags+=(--effort "$effort")
         [ "${#mcp_claude_flags[@]}" -gt 0 ] && flags+=("${mcp_claude_flags[@]}")
         ;;

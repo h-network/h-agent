@@ -135,6 +135,7 @@ any account and home directory:
 - `AGENT_CLI`: default CLI (`claude`)
 - `AGENT_SKIP_PERMISSIONS`: `1` to add unattended-mode flags (default), `0` not to
 - `AGENT_CLAUDE_TOOLS`: space-separated Claude tool list; empty means unrestricted
+- `AGENT_IDLE_COMPACTION`: `0` (default) turns claude's idle compaction off for the launch, `1` leaves it on; passed via `--settings`, so it beats `settings.json`
 - `AGENT_EFFORT`: reasoning effort for claude, codex, and agy (default `high`; empty uses each CLI's default) — `low`/`medium`/`high`/`xhigh`/`max` (codex also accepts `ultra`). claude/agy take `--effort`; codex takes a `-c model_reasoning_effort` override
 - `AGENT_PROVIDER_URL`: local endpoint URL (Claude only)
 - `AGENT_PROVIDER_MODEL`: model exposed by the endpoint
