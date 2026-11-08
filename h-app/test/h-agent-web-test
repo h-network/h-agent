@@ -256,7 +256,11 @@ def test_codex_adapter(tmp: pathlib.Path) -> None:
     check(result == "codex answer", "Codex result missing")
     overrides = captured["config"]["config_overrides"]
     check("features.shell_tool=false" in overrides, "Codex shell tool was not disabled")
-    check("features.code_mode_host=false" in overrides, "Codex code-mode host was not disabled")
+    check("features.unified_exec=false" in overrides, "Codex unified exec was not disabled")
+    check(
+        "features.code_mode_host=false" not in overrides,
+        "Codex MCP dispatcher was disabled with the code-mode host",
+    )
     check(any("bearer_token_env_var" in item for item in overrides), "Codex MCP bearer config missing")
     check(captured["thread"]["approval_mode"] == "deny_all", "Codex approvals are not denied")
 

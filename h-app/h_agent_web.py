@@ -387,7 +387,6 @@ async def run_codex(
     overrides = [
         "features.shell_tool=false",
         "features.unified_exec=false",
-        "features.code_mode_host=false",
     ]
     for name, server in mcp_servers.items():
         parts = [f"url={_toml_string(server['url'])}"]

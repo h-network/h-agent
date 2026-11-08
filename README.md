@@ -202,6 +202,11 @@ off by default even when the user's interactive CLI registry contains HTTP
 servers; pass `--mcp` to `h-agent sdk` or `h-agent web serve` to opt in. With
 no explicit `--mcp`, the SDK web service connects to no MCP server.
 
+For Codex, the code-mode host remains available because code-mode-only models
+use it to dispatch remote MCP calls. The web runner separately removes Codex's
+local shell and unified-exec tools, denies approvals, and uses its read-only
+sandbox; enabling MCP does not restore those local execution tools.
+
 Approval prompts are skipped by default. This is intended for externally
 sandboxed environments. Set `AGENT_SKIP_PERMISSIONS=0` when that is not
 appropriate.
