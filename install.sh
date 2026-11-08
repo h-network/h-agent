@@ -470,6 +470,8 @@ seedprofile_url=${H_AGENT_SEEDPROFILE_URL:-$base_download_url/seedProfile}
 setupconfigdir_url=${H_AGENT_SETUPCONFIGDIR_URL:-$base_download_url/setupConfigDir}
 profilelib_url=${H_AGENT_PROFILELIB_URL:-$base_download_url/h-agent-profile-lib.sh}
 capture_url=${H_AGENT_CAPTURE_URL:-$base_download_url/h-agent-capture}
+web_url=${H_AGENT_WEB_URL:-$base_download_url/h-agent-web}
+web_module_url=${H_AGENT_WEB_MODULE_URL:-$base_download_url/h_agent_web.py}
 
 download_verified() {
     local from=$1 to=$2
@@ -480,11 +482,22 @@ download_verified() {
     fi
 }
 
+download_python_verified() {
+    local from=$1 to=$2
+    download_file "$from" "$to"
+    if [ ! -s "$to" ] || ! head -n 1 "$to" | grep -q '^#!/usr/bin/env python3$'; then
+        echo "error: download from $from is not an h-agent Python component" >&2
+        exit 1
+    fi
+}
+
 download_verified "$url" "$download"
 download_verified "$seedprofile_url" "$tmpdir/seedProfile"
 download_verified "$setupconfigdir_url" "$tmpdir/setupConfigDir"
 download_verified "$profilelib_url" "$tmpdir/h-agent-profile-lib.sh"
 download_verified "$capture_url" "$tmpdir/h-agent-capture"
+download_verified "$web_url" "$tmpdir/h-agent-web"
+download_python_verified "$web_module_url" "$tmpdir/h_agent_web.py"
 
 cli_ok=()
 cli_failed=()
@@ -505,6 +518,8 @@ install -m 0755 "$tmpdir/seedProfile" "$bindir/seedProfile"
 install -m 0755 "$tmpdir/setupConfigDir" "$bindir/setupConfigDir"
 install -m 0755 "$tmpdir/h-agent-profile-lib.sh" "$bindir/h-agent-profile-lib.sh"
 install -m 0755 "$tmpdir/h-agent-capture" "$bindir/h-agent-capture"
+install -m 0755 "$tmpdir/h-agent-web" "$bindir/h-agent-web"
+install -m 0644 "$tmpdir/h_agent_web.py" "$bindir/h_agent_web.py"
 
 echo "installed h-agent to $bindir/h-agent"
 if [ -z "$destdir" ]; then

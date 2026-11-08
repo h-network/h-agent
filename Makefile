@@ -14,6 +14,8 @@ install:
 	install -m 0755 h-app/setupConfigDir "$(DESTDIR)$(bindir)/setupConfigDir"
 	install -m 0755 h-app/h-agent-profile-lib.sh "$(DESTDIR)$(bindir)/h-agent-profile-lib.sh"
 	install -m 0755 h-app/h-agent-capture "$(DESTDIR)$(bindir)/h-agent-capture"
+	install -m 0755 h-app/h-agent-web "$(DESTDIR)$(bindir)/h-agent-web"
+	install -m 0644 h-app/h_agent_web.py "$(DESTDIR)$(bindir)/h_agent_web.py"
 
 uninstall:
 	rm -f "$(DESTDIR)$(bindir)/h-agent"
@@ -21,9 +23,12 @@ uninstall:
 	rm -f "$(DESTDIR)$(bindir)/setupConfigDir"
 	rm -f "$(DESTDIR)$(bindir)/h-agent-profile-lib.sh"
 	rm -f "$(DESTDIR)$(bindir)/h-agent-capture"
+	rm -f "$(DESTDIR)$(bindir)/h-agent-web"
+	rm -f "$(DESTDIR)$(bindir)/h_agent_web.py"
 
 test:
 	./h-app/test/h-agent-test
+	./h-app/test/h-agent-web-test
 	./h-app/test/h-agent-capture-test
 	./h-app/test/probe-provider-test
 	./h-app/test/install-test

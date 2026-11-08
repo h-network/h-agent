@@ -67,7 +67,9 @@ fork, or `H_AGENT_INSTALL_URL` to download `h-agent` itself from a custom URL.
 download as siblings of that URL by default (same directory, their own
 filenames); override them individually with `H_AGENT_SEEDPROFILE_URL`,
 `H_AGENT_SETUPCONFIGDIR_URL`, `H_AGENT_PROFILELIB_URL`, and
-`H_AGENT_CAPTURE_URL` if they live elsewhere.
+`H_AGENT_CAPTURE_URL` if they live elsewhere. The optional SDK web launcher's
+two files follow the same rule; override them with `H_AGENT_WEB_URL` and
+`H_AGENT_WEB_MODULE_URL`.
 Set `H_AGENT_INSTALL_CLIS=0` to install only the h-agent scripts, without any
 CLI. When `DESTDIR` is set, the installer stages only those scripts and never
 changes the invoking user's CLI installations or configuration. Set
@@ -124,6 +126,81 @@ h-agent --log                   # print the capture log
 h-agent --log claude            # only claude's entries
 h-agent --help
 ```
+
+### SDK web service (Claude and Codex)
+
+`h-agent` includes a deployment-neutral SDK runner and small embeddable Web UI.
+It does not create containers, configure TLS, manage a reverse proxy, or assume
+how it is supervised. Run it directly, under a host service manager, or in a
+custom image with the filesystem, credentials, and network policy appropriate
+for that deployment.
+
+The SDK packages are optional so the Bash-only CLI wrapper keeps working on
+machines that do not need the web service. Install them in the Python
+environment that will run it:
+
+```sh
+python3 -m venv ~/.local/share/h-agent/sdk-web
+~/.local/share/h-agent/sdk-web/bin/pip install \
+  'claude-agent-sdk>=0.2,<1' 'openai-codex>=0.1,<1'
+export H_AGENT_PYTHON=$HOME/.local/share/h-agent/sdk-web/bin/python
+```
+
+Run one turn as newline-delimited JSON, useful for proving credentials and
+provider behavior before opening an HTTP listener:
+
+```sh
+h-agent sdk claude --prompt 'Reply with hello'
+h-agent sdk codex --prompt 'Reply with hello'
+printf 'Summarize this workspace' | h-agent sdk claude
+```
+
+Or serve the UI and API:
+
+```sh
+h-agent web serve --bind 127.0.0.1 --port 8090 --cwd "$PWD"
+```
+
+The page is at `/ui`; its API is:
+
+- `POST /api/runs` with `provider` and `prompt`
+- `GET /api/runs/{id}` for current status and the final result
+- `GET /api/runs/{id}/events?after={sequence}` for resumable SSE
+- `POST /api/runs/{id}/cancel` for cooperative cancellation
+- `GET /healthz` for a credential-free liveness check
+
+The normalized stream uses `run.started`, `provider.started`,
+`assistant.delta`/`assistant.message`, `tool.started`/`tool.completed`,
+`usage.updated`, and terminal `run.completed`/`run.failed`/`run.cancelled`
+events. Raw tool inputs and results are not copied into the stream.
+
+The default loopback listener may run without an API token. A non-loopback
+bind is refused unless `H_AGENT_WEB_TOKEN`/`--token-file` supplies a bearer
+token, or `--allow-unauthenticated` explicitly declares that an authenticating
+proxy owns the boundary. `--frame-origin https://portal.example.invalid`
+adds that exact origin to the page's CSP `frame-ancestors`; wildcard origins
+are not accepted. A same-origin reverse-proxy route can then embed it without
+putting permanent credentials in an iframe URL:
+
+```html
+<iframe src="/agent/ui" title="Agent" style="width:100%;height:800px;border:0"></iframe>
+```
+
+Local shell and filesystem tools are disabled in the web runner. It can use
+HTTP MCP servers that the operator has explicitly added to h-agent's existing
+registry; stdio MCP entries are ignored by this network-facing service. For
+example, with a non-secret placeholder endpoint:
+
+```sh
+h-agent mcp add research --url https://mcp.example.invalid/mcp \
+  --token-file /run/secrets/example-token
+```
+
+Bearer credentials are resolved from the configured file or environment at
+run time and are never returned by the API or emitted as events. MCP access is
+off by default even when the user's interactive CLI registry contains HTTP
+servers; pass `--mcp` to `h-agent sdk` or `h-agent web serve` to opt in. With
+no explicit `--mcp`, the SDK web service connects to no MCP server.
 
 Approval prompts are skipped by default. This is intended for externally
 sandboxed environments. Set `AGENT_SKIP_PERMISSIONS=0` when that is not

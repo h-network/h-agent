@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""No-network tests for h-agent's SDK web runner and streaming API."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import json
+import os
+import pathlib
+import sys
+import tempfile
+import threading
+import time
+import types
+import urllib.error
+import urllib.request
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location("h_agent_web", ROOT / "h_agent_web.py")
+assert SPEC and SPEC.loader
+web = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = web
+SPEC.loader.exec_module(web)
+
+
+def check(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def wait_terminal(record: web.RunRecord) -> None:
+    deadline = time.monotonic() + 3
+    while record.status not in web.TERMINAL_STATES and time.monotonic() < deadline:
+        time.sleep(0.01)
+    check(record.status in web.TERMINAL_STATES, "run did not finish")
+
+
+def test_mcp_registry(tmp: pathlib.Path) -> None:
+    registry = tmp / "mcp.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "remote": {
+                    "url": "https://mcp.example.invalid/mcp",
+                    "token_env": "EXAMPLE_MCP_TOKEN",
+                },
+                "local-is-ignored": {"command": "do-not-run", "args": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.environ["EXAMPLE_MCP_TOKEN"] = "test-only-token"
+    try:
+        servers = web.load_http_mcp_servers(registry)
+    finally:
+        del os.environ["EXAMPLE_MCP_TOKEN"]
+    check(list(servers) == ["remote"], "stdio MCP entry reached web runner")
+    check(servers["remote"]["token"] == "test-only-token", "MCP bearer token not resolved")
+
+
+def test_run_manager(tmp: pathlib.Path) -> None:
+    async def fake(record: web.RunRecord, servers: dict) -> str:
+        check(not servers, "unexpected MCP servers")
+        record.emit("assistant.message", text="hello")
+        return "done"
+
+    manager = web.RunManager(runners={"claude": fake, "codex": fake})
+    record = manager.start(provider="claude", prompt="hi", cwd=str(tmp))
+    wait_terminal(record)
+    check(record.status == "completed", record.error)
+    check(record.result == "done", "final result missing")
+    check(
+        [event["type"] for event in record.events]
+        == ["run.started", "assistant.message", "run.completed"],
+        "normalized event order changed",
+    )
+
+
+def test_claude_adapter(tmp: pathlib.Path) -> None:
+    module = types.ModuleType("claude_agent_sdk")
+
+    class SystemMessage:
+        def __init__(self) -> None:
+            self.subtype = "init"
+
+    class TextBlock:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class ToolUseBlock:
+        def __init__(self) -> None:
+            self.name, self.id = "mcp__remote__web_fetch", "tool-1"
+
+    class ToolResultBlock:
+        def __init__(self) -> None:
+            self.tool_use_id, self.is_error = "tool-1", False
+
+    class AssistantMessage:
+        def __init__(self) -> None:
+            self.content = [ToolUseBlock(), ToolResultBlock(), TextBlock("answer")]
+            self.usage = {"input_tokens": 3}
+
+    class ResultMessage:
+        def __init__(self) -> None:
+            self.result, self.is_error, self.num_turns = "answer", False, 1
+            self.duration_ms, self.total_cost_usd = 12, 0.01
+            self.usage, self.session_id = {"output_tokens": 1}, "session-1"
+
+    class StreamEvent:
+        def __init__(self, text: str) -> None:
+            self.event = {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": text},
+            }
+
+    captured: dict = {}
+
+    class ClaudeAgentOptions:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    async def query(*, prompt: str, options):
+        check(prompt == "question", "Claude prompt changed")
+        check(options is not None, "Claude options absent")
+        for item in (SystemMessage(), StreamEvent("ans"), StreamEvent("wer"), AssistantMessage(), ResultMessage()):
+            yield item
+
+    for name, value in locals().copy().items():
+        if name in {
+            "SystemMessage", "TextBlock", "ToolUseBlock", "ToolResultBlock",
+            "AssistantMessage", "ResultMessage", "StreamEvent", "ClaudeAgentOptions", "query",
+        }:
+            setattr(module, name, value)
+    previous = sys.modules.get("claude_agent_sdk")
+    sys.modules["claude_agent_sdk"] = module
+    try:
+        record = web.RunRecord("claude-1", "claude", "question", str(tmp), {})
+        result = asyncio.run(
+            web.run_claude(
+                record,
+                {"remote": {"url": "https://mcp.example.invalid/mcp", "token": "secret"}},
+            )
+        )
+    finally:
+        if previous is None:
+            del sys.modules["claude_agent_sdk"]
+        else:
+            sys.modules["claude_agent_sdk"] = previous
+    check(result == "answer", "Claude result missing")
+    check(captured["tools"] == [], "Claude local tools were not disabled")
+    check(captured["include_partial_messages"] is True, "Claude partial streaming disabled")
+    check(captured["mcp_servers"]["remote"]["headers"]["Authorization"] == "Bearer secret", "Claude MCP bearer header missing")
+    check(any(event["type"] == "tool.started" for event in record.events), "Claude tool event missing")
+
+
+def test_codex_adapter(tmp: pathlib.Path) -> None:
+    package = types.ModuleType("openai_codex")
+    run_module = types.ModuleType("openai_codex._run")
+    generated = types.ModuleType("openai_codex.generated.v2_all")
+
+    class ItemCompletedNotification:
+        def __init__(self, item) -> None:
+            self.item = types.SimpleNamespace(root=item)
+
+    class ItemStartedNotification:
+        def __init__(self, item) -> None:
+            self.item = types.SimpleNamespace(root=item)
+
+    class AgentMessageDeltaNotification:
+        def __init__(self, delta: str) -> None:
+            self.delta = delta
+
+    class ThreadTokenUsageUpdatedNotification:
+        def __init__(self) -> None:
+            self.token_usage = {"total_tokens": 4}
+
+    class TurnCompletedNotification:
+        def __init__(self) -> None:
+            self.turn = types.SimpleNamespace(
+                status=types.SimpleNamespace(value="completed"), duration_ms=8
+            )
+
+    class AgentMessageThreadItem:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    captured: dict = {}
+
+    class CodexConfig:
+        def __init__(self, **kwargs) -> None:
+            captured["config"] = kwargs
+
+    class ApprovalMode:
+        deny_all = "deny_all"
+
+    class Sandbox:
+        read_only = "read_only"
+
+    class Handle:
+        async def stream(self):
+            payloads = (
+                AgentMessageDeltaNotification("codex "),
+                AgentMessageDeltaNotification("answer"),
+                ItemCompletedNotification(AgentMessageThreadItem("codex answer")),
+                ThreadTokenUsageUpdatedNotification(),
+                TurnCompletedNotification(),
+            )
+            for payload in payloads:
+                yield types.SimpleNamespace(payload=payload)
+
+    class Thread:
+        async def turn(self, prompt: str):
+            check(prompt == "question", "Codex prompt changed")
+            return Handle()
+
+    class AsyncCodex:
+        def __init__(self, config) -> None:
+            captured["client_config"] = config
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def thread_start(self, **kwargs):
+            captured["thread"] = kwargs
+            return Thread()
+
+    for target, values in (
+        (package, {"ApprovalMode": ApprovalMode, "AsyncCodex": AsyncCodex, "CodexConfig": CodexConfig, "Sandbox": Sandbox}),
+        (run_module, {"ItemCompletedNotification": ItemCompletedNotification, "ThreadTokenUsageUpdatedNotification": ThreadTokenUsageUpdatedNotification, "TurnCompletedNotification": TurnCompletedNotification}),
+        (generated, {"AgentMessageThreadItem": AgentMessageThreadItem, "ItemStartedNotification": ItemStartedNotification, "AgentMessageDeltaNotification": AgentMessageDeltaNotification}),
+    ):
+        for name, value in values.items():
+            setattr(target, name, value)
+    names = ["openai_codex", "openai_codex._run", "openai_codex.generated.v2_all"]
+    previous = {name: sys.modules.get(name) for name in names}
+    sys.modules.update(dict(zip(names, (package, run_module, generated))))
+    try:
+        record = web.RunRecord("codex-1", "codex", "question", str(tmp), {})
+        result = asyncio.run(
+            web.run_codex(
+                record,
+                {"remote": {"url": "https://mcp.example.invalid/mcp", "token": "secret"}},
+            )
+        )
+    finally:
+        for name in names:
+            if previous[name] is None:
+                del sys.modules[name]
+            else:
+                sys.modules[name] = previous[name]
+    check(result == "codex answer", "Codex result missing")
+    overrides = captured["config"]["config_overrides"]
+    check("features.shell_tool=false" in overrides, "Codex shell tool was not disabled")
+    check("features.code_mode_host=false" in overrides, "Codex code-mode host was not disabled")
+    check(any("bearer_token_env_var" in item for item in overrides), "Codex MCP bearer config missing")
+    check(captured["thread"]["approval_mode"] == "deny_all", "Codex approvals are not denied")
+
+
+def request(url: str, *, method: str = "GET", token: str = "", body=None):
+    headers = {}
+    data = None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode()
+    return urllib.request.urlopen(
+        urllib.request.Request(url, method=method, headers=headers, data=data), timeout=4
+    )
+
+
+def test_http(tmp: pathlib.Path) -> None:
+    async def fake(record: web.RunRecord, servers: dict) -> str:
+        record.emit("assistant.message", text="streamed")
+        return "finished"
+
+    manager = web.RunManager(runners={"claude": fake, "codex": fake})
+    app = web.WebApplication(
+        manager=manager,
+        default_cwd=str(tmp),
+        token="api-token",
+        frame_ancestors="'self' https://portal.example.invalid",
+    )
+    server = web.ThreadingHTTPServer(("127.0.0.1", 0), app.handler_class())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}/"
+    try:
+        with request(base + "healthz") as response:
+            check(json.load(response)["ok"] is True, "health endpoint failed")
+        with request(base + "ui") as response:
+            check("https://portal.example.invalid" in response.headers["Content-Security-Policy"], "frame origin missing")
+        try:
+            request(base + "api/runs", method="POST", body={"prompt": "x"})
+            raise AssertionError("API accepted a request without its bearer token")
+        except urllib.error.HTTPError as exc:
+            check(exc.code == 401, "wrong unauthenticated status")
+        with request(
+            base + "api/runs",
+            method="POST",
+            token="api-token",
+            body={"provider": "codex", "prompt": "question"},
+        ) as response:
+            created = json.load(response)
+        record = manager.get(created["id"])
+        assert record
+        wait_terminal(record)
+        with request(
+            base + f"api/runs/{record.id}/events?after=0", token="api-token"
+        ) as response:
+            stream = response.read().decode()
+        check("event: assistant.message" in stream, "SSE assistant event missing")
+        check("event: run.completed" in stream, "SSE completion missing")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        tmp = pathlib.Path(directory)
+        test_mcp_registry(tmp)
+        test_run_manager(tmp)
+        test_claude_adapter(tmp)
+        test_codex_adapter(tmp)
+        test_http(tmp)
+    print("ok - h-agent SDK web")
+
+
+if __name__ == "__main__":
+    main()

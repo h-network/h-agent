@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+set -euo pipefail
+
+self_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+exec "${H_AGENT_PYTHON:-python3}" "$self_dir/h_agent_web.py" "$@"

@@ -18,6 +18,8 @@ usage() {
 
 usage: h-agent [claude|agy|codex] [args...]
        h-agent fork [claude|codex] [session-id]
+       h-agent web <serve|run> ...
+       h-agent sdk <claude|codex> ...
        h-agent mcp <add|list|remove> ...      (h-agent's MCP registry)
        h-agent [claude|agy|codex] mcp ...     (that CLI's own mcp command)
        h-agent probeProvider <url> [model-id]
@@ -29,6 +31,9 @@ usage: h-agent [claude|agy|codex] [args...]
   codex    --dangerously-bypass-approvals-and-sandbox
   fork     fork a session into a new one, leaving the original untouched;
            with a session id forks that one, otherwise the most recent
+  web      serve the deployment-neutral Claude/Codex SDK API and Web UI,
+           or run one SDK turn as an NDJSON stream
+  sdk      shorthand for "h-agent web run"
   mcp      register MCP servers once; every launch injects them into
            claude, codex and agy (see 'h-agent mcp --help')
   probeProvider
@@ -457,6 +462,28 @@ if [ "${1:-}" = probeProvider ] || [ "${1:-}" = probe-provider ]; then
     shift
     probe_provider "$@"
     exit $?
+fi
+
+if [ "${1:-}" = web ] || [ "${1:-}" = sdk ]; then
+    web_command=$1
+    shift
+    self=$0
+    case "$self" in
+        */*) ;;
+        *) self=$(command -v -- "$self" 2>/dev/null || printf '%s' "$self") ;;
+    esac
+    self_dir=$(CDPATH='' cd -- "$(dirname -- "$self")" 2>/dev/null && pwd)
+    web_runner=$self_dir/h-agent-web
+    if [ ! -x "$web_runner" ]; then
+        echo "error: h-agent SDK web component is not installed beside $self" >&2
+        exit 127
+    fi
+    if [ "$web_command" = sdk ]; then
+        set -- run "$@"
+    elif [ "$#" -eq 0 ]; then
+        set -- serve
+    fi
+    exec "$web_runner" "$@"
 fi
 
 if [ "${1:-}" = mcp ]; then

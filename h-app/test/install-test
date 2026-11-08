@@ -36,6 +36,11 @@ case "$url" in
         body='echo installed-test-profile-lib' ;;
     https://example.invalid/h-agent-capture)
         body='echo installed-test-capture' ;;
+    https://example.invalid/h-agent-web)
+        body='echo installed-test-web' ;;
+    https://example.invalid/h_agent_web.py)
+        printf '#!/usr/bin/env python3\nprint("installed-test-web-module")\n' >"$output"
+        exit 0 ;;
     https://claude.ai/install.sh)
         body='printf "claude %s\\n" "$*" >>"$TEST_LOG"; mkdir -p "$HOME/.local/bin"; printf "#!/usr/bin/env bash\\necho %s \\(Claude Code\\)\\n" "$1" >"$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"' ;;
     https://chatgpt.com/codex/install.sh)
@@ -64,6 +69,10 @@ test -x "$tmp/home/.local/bin/h-agent-profile-lib.sh"
 test "$("$tmp/home/.local/bin/h-agent-profile-lib.sh")" = installed-test-profile-lib
 test -x "$tmp/home/.local/bin/h-agent-capture"
 test "$("$tmp/home/.local/bin/h-agent-capture")" = installed-test-capture
+test -x "$tmp/home/.local/bin/h-agent-web"
+test "$("$tmp/home/.local/bin/h-agent-web")" = installed-test-web
+test -r "$tmp/home/.local/bin/h_agent_web.py"
+test "$(python "$tmp/home/.local/bin/h_agent_web.py")" = installed-test-web-module
 # These variables must remain literal in the printed command.
 # shellcheck disable=SC2016
 grep -Fqx 'echo '\''export PATH="$HOME/.local/bin:$PATH"'\'' >> "$HOME/.zshrc" && source "$HOME/.zshrc"' <<<"$output"
@@ -154,6 +163,8 @@ test -x "$tmp/stage/opt/h-agent/bin/seedProfile"
 test -x "$tmp/stage/opt/h-agent/bin/setupConfigDir"
 test -x "$tmp/stage/opt/h-agent/bin/h-agent-profile-lib.sh"
 test -x "$tmp/stage/opt/h-agent/bin/h-agent-capture"
+test -x "$tmp/stage/opt/h-agent/bin/h-agent-web"
+test -r "$tmp/stage/opt/h-agent/bin/h_agent_web.py"
 test "$(wc -l <"$TEST_LOG")" -eq "$before"
 test ! -e "$tmp/stage-home/.claude.json"
 test ! -e "$tmp/stage-home/.codex/config.toml"
@@ -178,6 +189,8 @@ test -x "$codex_fail_home/.local/bin/seedProfile"
 test -x "$codex_fail_home/.local/bin/setupConfigDir"
 test -x "$codex_fail_home/.local/bin/h-agent-profile-lib.sh"
 test -x "$codex_fail_home/.local/bin/h-agent-capture"
+test -x "$codex_fail_home/.local/bin/h-agent-web"
+test -r "$codex_fail_home/.local/bin/h_agent_web.py"
 test -x "$codex_fail_home/.local/bin/claude"
 test -x "$codex_fail_home/.local/bin/agy"
 test ! -e "$codex_fail_home/.local/bin/codex"
