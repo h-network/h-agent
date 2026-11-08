@@ -389,7 +389,10 @@ async def run_codex(
         "features.unified_exec=false",
     ]
     for name, server in mcp_servers.items():
-        parts = [f"url={_toml_string(server['url'])}"]
+        parts = [
+            f"url={_toml_string(server['url'])}",
+            'default_tools_approval_mode="approve"',
+        ]
         if server.get("token"):
             env_name = _token_env_name(name)
             child_env[env_name] = server["token"]

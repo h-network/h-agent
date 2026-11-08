@@ -205,7 +205,11 @@ no explicit `--mcp`, the SDK web service connects to no MCP server.
 For Codex, the code-mode host remains available because code-mode-only models
 use it to dispatch remote MCP calls. The web runner separately removes Codex's
 local shell and unified-exec tools, denies approvals, and uses its read-only
-sandbox; enabling MCP does not restore those local execution tools.
+sandbox; enabling MCP does not restore those local execution tools. Because
+the service is unattended, Codex preapproves tools on each server selected by
+`--mcp` while continuing to deny every other approval request. Operators must
+therefore give each configured MCP credential only the tools and scopes that
+web-service users are intended to exercise.
 
 Approval prompts are skipped by default. This is intended for externally
 sandboxed environments. Set `AGENT_SKIP_PERMISSIONS=0` when that is not

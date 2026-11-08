@@ -262,6 +262,10 @@ def test_codex_adapter(tmp: pathlib.Path) -> None:
         "Codex MCP dispatcher was disabled with the code-mode host",
     )
     check(any("bearer_token_env_var" in item for item in overrides), "Codex MCP bearer config missing")
+    check(
+        any('default_tools_approval_mode="approve"' in item for item in overrides),
+        "Codex MCP tools were not preapproved for unattended use",
+    )
     check(captured["thread"]["approval_mode"] == "deny_all", "Codex approvals are not denied")
 
 
