@@ -133,7 +133,8 @@ h-agent --help
 It does not create containers, configure TLS, manage a reverse proxy, or assume
 how it is supervised. Run it directly, under a host service manager, or in a
 custom image with the filesystem, credentials, and network policy appropriate
-for that deployment.
+for that deployment. The recovery and runtime contract is recorded in
+[`docs/sdk-web-continuity.md`](docs/sdk-web-continuity.md).
 
 The SDK packages are optional so the Bash-only CLI wrapper keeps working on
 machines that do not need the web service. Install them in the Python
